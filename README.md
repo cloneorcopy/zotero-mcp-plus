@@ -200,7 +200,7 @@ Here are some screenshots demonstrating the functionality of Zotero MCP:
 
 ## 🔧 API Reference (MCP Tools)
 
-The integrated MCP server provides **32 tools** in 6 categories:
+The integrated MCP server provides **34 tools** in 6 categories:
 
 ### 1. Search & Query (7 tools)
 
@@ -288,7 +288,7 @@ Import items by identifier (DOI, arXiv, ISBN, PMID, ADS bibcode) using Zotero's 
 Move one or more items to Zotero Trash. Items stay recoverable until the user empties Trash; permanent deletion is not supported (`permanent` is rejected).
 - `itemKeys` (required, array of item keys; deduplicated), `libraryID`
 
-### 6. Citation & Bibliography (3 tools)
+### 6. Citation & Bibliography (5 tools)
 
 #### `export_bibliography`
 Export one or more Zotero items as BibLaTeX/BibTeX (or CSL-JSON/CSL-YAML) entries powered by the zotero-better-bibtex (BBT) plugin. Requires Better BibTeX to be installed and running in Zotero.
@@ -301,6 +301,14 @@ Generate a formatted reference (bibliography entry) or in-text citation for one 
 #### `list_citation_styles`
 List CSL citation styles available in Zotero (for use with `get_citation`).
 - `filter`
+
+#### `sync_bib`
+Sync the whole Zotero library to a `.bib` file on disk: top-level items are exported through Better BibTeX and written to the given path. An existing file is protected unless `overwrite` is set. Off by default — turn on **Enable Citation File Tools** in the plugin preferences.
+- `bibPath` (required, absolute path), `format` (bibtex/biblatex/csljson/cslyaml), `libraryID`, `includeChildren`, `overwrite`, `timeoutMs`
+
+#### `cite`
+Insert a citation into a LaTeX (`.tex`) or Markdown draft and keep the `.bib` file in sync: resolve an item by `itemKey` or `query`, append its BibTeX entry to `bibPath` (skipped when the key is already present), then write `\cite{key}` or [@key] into the draft. Uses the same **Enable Citation File Tools** switch.
+- `bibPath` (required), `itemKey` or `query`, `texPath` or `markdownPath`, `marker`, `libraryID`
 
 ---
 

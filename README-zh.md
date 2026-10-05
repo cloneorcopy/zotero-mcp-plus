@@ -312,7 +312,7 @@ MCP 服务器已集成在插件内，位于 `src/modules/streamableMCPServer.ts`
 
 ## 🔧 API 参考（MCP 工具列表）
 
-插件集成的 MCP 服务器提供以下 **32 个工具**，分为 6 大类：
+插件集成的 MCP 服务器提供以下 **34 个工具**，分为 6 大类：
 
 ### 一、搜索与查询（7 个）
 
@@ -489,7 +489,7 @@ MCP 服务器已集成在插件内，位于 `src/modules/streamableMCPServer.ts`
 | `itemKeys` | string[] | **必需**，要移入回收站的条目 Key 列表（自动去重） |
 | `libraryID` | number | 目标文库（默认个人文库） |
 
-### 六、引文与参考文献（3 个）
+### 六、引文与参考文献（5 个）
 
 #### `export_bibliography`
 通过 zotero-better-bibtex（BBT）插件将一个或多个 Zotero 条目导出为 BibLaTeX/BibTeX（或 CSL-JSON/CSL-YAML）条目。需要 Zotero 中安装并运行 Better BibTeX。
@@ -519,6 +519,31 @@ MCP 服务器已集成在插件内，位于 `src/modules/streamableMCPServer.ts`
 | 参数 | 类型 | 描述 |
 |---|---|---|
 | `filter` | string | 按标题或 ID 关键字过滤（不区分大小写，如 "apa"、"chicago"） |
+
+#### `sync_bib`
+将整个 Zotero 文献库同步导出为磁盘上的 `.bib` 文件：顶级条目经 Better BibTeX 导出后写入指定路径。已存在的文件默认受保护，需显式设置 `overwrite` 才会覆盖。默认关闭，需在偏好设置中勾选「启用引文文件工具」。
+
+| 参数 | 类型 | 描述 |
+|---|---|---|
+| `bibPath` | string | **必需**，输出 `.bib` 文件的绝对路径 |
+| `format` | string | bibtex（默认）/biblatex/csljson/cslyaml |
+| `libraryID` | number | 目标文库（默认个人文库） |
+| `includeChildren` | boolean | 是否包含子条目（笔记、附件），默认 false |
+| `overwrite` | boolean | 设为 true 才覆盖已存在的文件，默认 false |
+| `timeoutMs` | number | BBT JSON-RPC 超时（1000-600000 毫秒，默认 30000） |
+
+#### `cite`
+在 LaTeX（`.tex`）或 Markdown 草稿中插入引用并同步 `.bib` 文件：按 `itemKey` 或 `query` 定位条目，将 BibTeX 条目追加到 `bibPath`（已存在相同引用键则跳过），再向草稿写入 `\cite{key}` 或 [@key]。同样受「启用引文文件工具」开关控制。
+
+| 参数 | 类型 | 描述 |
+|---|---|---|
+| `bibPath` | string | **必需**，`.bib` 文件路径（不存在则创建） |
+| `itemKey` | string | 条目 Key（与 `query` 二选一） |
+| `query` | string | 检索关键词，匹配标题与作者（与 `itemKey` 二选一） |
+| `texPath` | string | LaTeX 草稿路径（与 `markdownPath` 二选一） |
+| `markdownPath` | string | Markdown 草稿路径（与 `texPath` 二选一） |
+| `marker` | string | 占位符，提供时替换为引用，否则追加到文件末尾 |
+| `libraryID` | number | 目标文库（默认个人文库） |
 
 ---
 
