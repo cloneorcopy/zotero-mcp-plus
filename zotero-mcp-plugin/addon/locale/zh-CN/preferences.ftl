@@ -238,6 +238,6 @@ pref-contact-wechat = 微信公众号：未来论文实验室
 pref-oauth-enable-text = 启用 OAuth 授权
 pref-oauth-enable-sub = 远程 MCP 客户端使用授权码 + PKCE（默认关闭）
 pref-oauth-url-label = 公网 HTTPS 地址
-pref-oauth-url-hint = 填写 Cloudflare Tunnel 域名，不包含 /mcp；Zotero 服务保持监听 127.0.0.1。
+pref-oauth-url-hint = 填写 Cloudflare Tunnel 域名，不包含 /mcp；隧道 origin 指向安全端口 = MCP 端口 + 1（默认 23121），本地 MCP 端口保持免授权。
 pref-oauth-generate = 生成或更换授权密码
 pref-oauth-password-hint = 请立即复制密码；本地只保存加盐摘要。更换密码后现有登录令牌失效。

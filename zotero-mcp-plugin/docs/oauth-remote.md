@@ -6,14 +6,14 @@ Cloudflare Tunnel transports HTTPS only; no Cloudflare Access service or third-p
 
 ## Configure Zotero
 
-1. Keep **Allow remote access** disabled so the MCP socket binds to `127.0.0.1`. Keep the **MCP server port** at its default `23120`, or note the custom port you configured — the tunnel target must use the same number.
-2. Configure Cloudflare Tunnel to forward `https://zotero.example.com` to `http://127.0.0.1:<mcp-port>` on the *same machine*, where `<mcp-port>` is the port configured under MCP server settings (default `23120`). Replace the example hostname with your own.
+1. Keep **Allow remote access** disabled. The unauthenticated local MCP listener keeps the configured **MCP server port** (default `23120`); when OAuth is enabled that listener is forced to loopback so it is never publicly reachable.
+2. Configure Cloudflare Tunnel to forward `https://zotero.example.com` to `http://127.0.0.1:<mcp-port + 1>` on the *same machine* — the **authenticated** listener, default `23121`. Do **not** point the tunnel at `<mcp-port>` (default `23120`): that listener serves local clients without a token. Replace the example hostname with your own.
 3. Under Zotero MCP preferences, enter `https://zotero.example.com` as the **public HTTPS origin** (without `/mcp`).
 4. Click **Generate / rotate authorization password**. Copy the generated password now; only its salted SHA-256 digest is stored in Zotero's preferences.
 5. Enable **OAuth authorization**. Leave the existing write operations disabled when only reading a literature library.
 6. In a ChatGPT workspace that permits custom remote MCP, connect the Streamable HTTP URL `https://zotero.example.com/mcp`. Use OAuth, and enter the generated password on the authorization page.
 
-Do not expose the local MCP port (default `23120`, or whatever custom port you configured) through router port forwarding or enable unrestricted LAN binding. The public endpoint must be HTTPS. If the public origin or password changes, existing OAuth sessions and client registrations are invalidated.
+Do not expose either local port — the unauthenticated `<mcp-port>` (default `23120`) or the OAuth listener `<mcp-port + 1>` (default `23121`) — through router port forwarding, and do not enable unrestricted LAN binding. The public endpoint must be HTTPS. If the public origin or password changes, existing OAuth sessions and client registrations are invalidated.
 
 ## Supported endpoints
 
