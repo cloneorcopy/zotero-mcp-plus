@@ -230,3 +230,10 @@ pref-contact-title = Contact Information
 pref-contact-email = Email: fransjone@mail.com
 pref-contact-github = GitHub: https://github.com/cookjohn/zotero-mcp
 pref-contact-wechat = WeChat: 未来论文实验室
+
+pref-oauth-enable-text = Enable OAuth authorization
+pref-oauth-enable-sub = Authorization Code + PKCE for remote MCP clients (off by default)
+pref-oauth-url-label = Public HTTPS origin
+pref-oauth-url-hint = Cloudflare Tunnel hostname without /mcp; point the tunnel origin at the secure port, MCP port + 1 (default 23121). The plain MCP port stays unauthenticated for local clients.
+pref-oauth-generate = Generate / rotate authorization password
+pref-oauth-password-hint = Copy this password now; only its salted digest is stored. Rotating invalidates existing sessions.
