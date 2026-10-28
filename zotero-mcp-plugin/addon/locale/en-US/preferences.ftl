@@ -227,6 +227,8 @@ pref-write-enable-text = Enable Write Operations
 pref-write-enable-sub = Allow AI clients to create and modify notes (disabled by default for safety)
 pref-citation-files-enable-text = Enable Citation File Tools
 pref-citation-files-enable-sub = Allow sync_bib and cite to write .bib/.tex/.md files (disabled by default for safety)
+pref-write-erase-text = Allow Permanent Erase (irreversible)
+pref-write-erase-sub = Lets erase_item delete attachments that are already in the Trash, releasing Zotero storage. Cannot be undone — off by default.
 
 pref-contact-title = Contact Information
 pref-contact-email = Email: fransjone@mail.com

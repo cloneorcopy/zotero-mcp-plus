@@ -227,6 +227,8 @@ pref-write-enable-text = Activer les operations d'ecriture
 pref-write-enable-sub = Permettre aux clients IA de creer et modifier des notes (desactive par defaut par securite)
 pref-citation-files-enable-text = Activer les outils de fichiers de citation
 pref-citation-files-enable-sub = Autorise sync_bib et cite à écrire des fichiers .bib/.tex/.md (désactivé par défaut)
+pref-write-erase-text = Autoriser la suppression definitive (irreversible)
+pref-write-erase-sub = Permet a erase_item de supprimer definitivement des pieces jointes deja dans la corbeille et de liberer le stockage. Irreversible ; desactive par defaut.
 
 pref-contact-title = Informations de contact
 pref-contact-email = Email : fransjone@mail.com
