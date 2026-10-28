@@ -219,3 +219,10 @@ pref-contact-title = Información de contacto
 pref-contact-email = Correo electrónico: fransjone@mail.com
 pref-contact-github = GitHub: https://github.com/cookjohn/zotero-mcp
 pref-contact-wechat = WeChat: 未来论文实验室
+
+pref-oauth-enable-text = Activar autorización OAuth
+pref-oauth-enable-sub = Authorization Code + PKCE para clientes MCP remotos (desactivado por defecto)
+pref-oauth-url-label = Origen HTTPS público
+pref-oauth-url-hint = Nombre de host de Cloudflare Tunnel sin /mcp; el servidor de Zotero sigue enlazado a 127.0.0.1.
+pref-oauth-generate = Generar o cambiar la contraseña de autorización
+pref-oauth-password-hint = Copia la contraseña ahora; solo se guarda un resumen con sal. Cambiarla invalida las sesiones existentes.

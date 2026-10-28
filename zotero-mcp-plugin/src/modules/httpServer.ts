@@ -6,6 +6,7 @@ import {
   getByteLength,
   type ByteReader,
 } from "./httpRequestReader";
+import { oauthServer } from "./oauthServer";
 
 declare let ztoolkit: ZToolkit;
 
@@ -226,6 +227,13 @@ export class HttpServer {
       `Content-Type: ${result.headers?.["Content-Type"] || "application/json; charset=utf-8"}\r\n`;
     
     let headers = baseHeaders;
+    // The OAuth redirects/challenge need these real HTTP headers.
+    for (const name of ["Location", "WWW-Authenticate", "Cache-Control", "Allow"]) {
+      const value = result.headers?.[name];
+      if (typeof value === "string" && !/[\r\n]/.test(value)) {
+        headers += `${name}: ${value}\r\n`;
+      }
+    }
     
     // Add session ID for MCP requests
     if (sessionId) {
@@ -387,6 +395,24 @@ export class HttpServer {
           // The body was already framed at exactly Content-Length bytes and
           // UTF-8 decoded once, on a complete buffer.
           const requestBody = method === "POST" ? read.body : "";
+
+          // Authenticate before allocating MCP sessions or dispatching tools.
+          // Only the OAuth discovery, registration, login, and token endpoints
+          // bypass Bearer validation. /ping remains a public health check.
+          // Header values are matched against the header block only, so a body
+          // can never supply an Authorization header.
+          const oauthResult = await oauthServer.handleRequest(method, path, query, requestBody, headerText);
+          const authResult = oauthResult ||
+            (oauthServer.isEnabled() && !path.startsWith("/ping") && !oauthServer.isAuthorized(headerText)
+              ? oauthServer.unauthorized() : null);
+          if (authResult) {
+            const authBody = authResult.body || "";
+            const authHeaders = this.buildHttpHeaders(authResult, false) +
+              `Content-Length: ${getByteLength(authBody)}\r\n\r\n`;
+            output.write(authHeaders, authHeaders.length);
+            if (authBody) writeStringToStream(output, authBody);
+            return;
+          }
 
           // Extract existing session ID or create new one for MCP requests.
           // Matched against headers only - a body must never be able to
