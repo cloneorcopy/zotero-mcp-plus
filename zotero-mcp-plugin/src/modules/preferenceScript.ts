@@ -125,6 +125,19 @@ function bindOAuthPreferences(doc: Document) {
       return;
     }
     Zotero.Prefs.set(`${prefix}.enabled`, enabled.checked, true);
+    // Listener layout changed: restart both sockets without changing OAuth flows.
+    const server = addon.data.httpServer;
+    if (server?.isServerRunning()) {
+      try {
+        const port = Number(Zotero.Prefs.get(
+          "extensions.zotero.zotero-mcp-plugin.mcp.server.port", true,
+        )) || 23120;
+        server.stop();
+        server.start(port);
+      } catch (error) {
+        addon.data.prefs!.window.alert(`Failed to restart MCP listener ports: ${error}`);
+      }
+    }
   });
 }
 
