@@ -1,15 +1,19 @@
 /**
  * Optional, self-hosted OAuth authorization-code + PKCE for the embedded MCP server.
  * Mirrors coding-tools-mcp's standalone OAuth endpoints, without a reverse proxy.
- * Clients, authorization codes, and bearer tokens are process-local by design.
+ * Client registrations, access tokens, and rotating refresh tokens survive Zotero restarts.
+ * Short-lived, single-use authorization codes remain process-local.
  */
 
 const PREFIX = "extensions.zotero.zotero-mcp-plugin.oauth";
 const CODE_TTL = 300_000;
 const TOKEN_TTL = 86_400_000;
+const REFRESH_TTL = 30 * 86_400_000;
+const STORAGE_VERSION = 1;
 const MAX_CLIENTS = 128;
 const MAX_CODES = 256;
 const MAX_TOKENS = 512;
+const MAX_REFRESH_TOKENS = 512;
 const MAX_BODY_BYTES = 8192;
 
 type HttpResult = {
@@ -23,6 +27,7 @@ type Client = {
   redirectURIs: string[];
   authMethod: "none" | "client_secret_post" | "client_secret_basic";
   secretDigest?: string;
+  grantTypes: string[];
 };
 
 type PendingCode = {
@@ -146,7 +151,9 @@ export class MCPAuthServer {
 
   private clients = new Map<string, Client>();
   private codes = new Map<string, PendingCode>();
+  // Maps are keyed by SHA-256 digests, never plaintext bearer/refresh tokens.
   private tokens = new Map<string, AccessToken>();
+  private refreshTokens = new Map<string, AccessToken>();
   private currentSettings = "";
 
   isEnabled(): boolean { return this.pref("enabled") === true; }
@@ -161,14 +168,72 @@ export class MCPAuthServer {
     return origin ? `${origin}/mcp` : null;
   }
 
+  /** Bind persisted sessions to the public origin and the current password digest.
+   *  Changing either revokes all old sessions and registered OAuth clients.
+   */
+  private configKey(): string {
+    return JSON.stringify([this.pref("serverUrl"), this.pref("passwordSalt"), this.pref("passwordHash")]);
+  }
+
+  private persistState(): void {
+    this.setPref("persistentState", JSON.stringify({
+      version: STORAGE_VERSION,
+      config: this.currentSettings,
+      clients: Array.from(this.clients.entries()),
+      tokens: Array.from(this.tokens.entries()),
+      refreshTokens: Array.from(this.refreshTokens.entries()),
+    }));
+  }
+
   private syncSettings(): void {
-    const id = [this.pref("enabled"), this.pref("serverUrl"), this.pref("passwordSalt"), this.pref("passwordHash")].join("\u0000");
-    if (id !== this.currentSettings) {
-      this.clients.clear();
-      this.codes.clear();
-      this.tokens.clear();
-      this.currentSettings = id;
+    const id = this.configKey();
+    if (id === this.currentSettings) return;
+    this.clients.clear();
+    this.codes.clear(); // One-time 5-minute codes are intentionally not persisted.
+    this.tokens.clear();
+    this.refreshTokens.clear();
+    const firstLoad = !this.currentSettings;
+    this.currentSettings = id;
+    if (firstLoad) {
+      const raw = this.pref("persistentState");
+      if (typeof raw === "string") {
+        try {
+          const saved = JSON.parse(raw);
+          if (saved?.version === STORAGE_VERSION && saved.config === id &&
+              Array.isArray(saved.clients) && Array.isArray(saved.tokens) &&
+              Array.isArray(saved.refreshTokens)) {
+            for (const entry of saved.clients.slice(0, MAX_CLIENTS)) {
+              if (!Array.isArray(entry) || entry.length !== 2) continue;
+              const [clientID, client] = entry;
+              if (typeof clientID !== "string" || !/^[0-9a-f]{48}$/.test(clientID) ||
+                  !client || !validRedirects(client.redirectURIs) ||
+                  !["none", "client_secret_post", "client_secret_basic"].includes(client.authMethod) ||
+                  !Array.isArray(client.grantTypes) || !client.grantTypes.includes("authorization_code") ||
+                  client.grantTypes.some((g: unknown) => g !== "authorization_code" && g !== "refresh_token") ||
+                  (client.authMethod === "none" ? client.secretDigest !== undefined :
+                    typeof client.secretDigest !== "string" || !/^[0-9a-f]{64}$/.test(client.secretDigest))) continue;
+              this.clients.set(clientID, client);
+            }
+            const restoreTokens = (entries: unknown[], target: Map<string, AccessToken>, limit: number) => {
+              for (const entry of entries.slice(0, limit)) {
+                if (!Array.isArray(entry) || entry.length !== 2) continue;
+                const [digest, token] = entry;
+                if (typeof digest !== "string" || !/^[0-9a-f]{64}$/.test(digest) ||
+                    !token || typeof token.clientID !== "string" ||
+                    !this.clients.has(token.clientID) || token.resource !== this.resource() ||
+                    !Number.isSafeInteger(token.expires) || token.expires <= Date.now()) continue;
+                target.set(digest, token);
+              }
+            };
+            restoreTokens(saved.tokens, this.tokens, MAX_TOKENS);
+            restoreTokens(saved.refreshTokens, this.refreshTokens, MAX_REFRESH_TOKENS);
+            return;
+          }
+        } catch { /* Malformed persisted state must never authorize a request. */ }
+      }
     }
+    // Password or origin changed, or no compatible state exists: fail closed.
+    this.persistState();
   }
 
   /** Only the newly generated password is displayed; Zotero stores its salted digest. */
@@ -197,17 +262,46 @@ export class MCPAuthServer {
   private prune(): void {
     const now = Date.now();
     for (const [key, item] of this.codes) if (item.expires <= now) this.codes.delete(key);
-    for (const [key, item] of this.tokens) if (item.expires <= now) this.tokens.delete(key);
+    let changed = false;
+    for (const [key, item] of this.tokens) if (item.expires <= now) {
+      this.tokens.delete(key); changed = true;
+    }
+    for (const [key, item] of this.refreshTokens) if (item.expires <= now) {
+      this.refreshTokens.delete(key); changed = true;
+    }
+    if (changed) this.persistState();
   }
 
-  isAuthorized(requestText: string): boolean {
+  async isAuthorized(requestText: string): Promise<boolean> {
     if (!this.ready()) return false;
     const match = /^Bearer\s+([0-9a-f]{64})$/i.exec(header(requestText, "Authorization"));
     if (!match) return false;
     this.prune();
-    const token = this.tokens.get(match[1]);
+    const digest = await sha256(`access:${match[1].toLowerCase()}`);
+    const token = this.tokens.get(digest);
     return Boolean(token && token.expires > Date.now() &&
       token.resource === this.resource() && this.clients.has(token.clientID));
+  }
+
+  /** Issue non-recoverable opaque credentials. Persist only their digests. */
+  private async issueTokens(clientID: string, resource: string): Promise<HttpResult> {
+    this.prune();
+    while (this.tokens.size >= MAX_TOKENS) this.tokens.delete(this.tokens.keys().next().value!);
+    while (this.refreshTokens.size >= MAX_REFRESH_TOKENS) this.refreshTokens.delete(this.refreshTokens.keys().next().value!);
+    const access = randomSecret(32);
+    const mayRefresh = this.clients.get(clientID)?.grantTypes.includes("refresh_token") === true;
+    const refresh = mayRefresh ? randomSecret(32) : undefined;
+    this.tokens.set(await sha256(`access:${access}`), {
+      clientID, resource, expires: Date.now() + TOKEN_TTL,
+    });
+    if (refresh) this.refreshTokens.set(await sha256(`refresh:${refresh}`), {
+      clientID, resource, expires: Date.now() + REFRESH_TTL,
+    });
+    this.persistState();
+    return response(200, {
+      access_token: access, ...(refresh ? { refresh_token: refresh } : {}),
+      token_type: "Bearer", expires_in: TOKEN_TTL / 1000,
+    });
   }
 
   unauthorized(): HttpResult {
@@ -262,7 +356,7 @@ export class MCPAuthServer {
         token_endpoint: `${origin}/oauth/token`,
         registration_endpoint: `${origin}/oauth/register`,
         response_types_supported: ["code"],
-        grant_types_supported: ["authorization_code"],
+        grant_types_supported: ["authorization_code", "refresh_token"],
         code_challenge_methods_supported: ["S256"],
         token_endpoint_auth_methods_supported: ["none", "client_secret_post", "client_secret_basic"],
       });
@@ -285,8 +379,11 @@ export class MCPAuthServer {
       if (!metadata || typeof metadata !== "object" || Array.isArray(metadata) ||
         !validRedirects(metadata.redirect_uris)) return response(400, { error: "invalid_client_metadata" });
       const authMethod = metadata.token_endpoint_auth_method || "none";
+      const grants = metadata.grant_types === undefined
+        ? ["authorization_code", "refresh_token"] : metadata.grant_types;
       if (!["none", "client_secret_post", "client_secret_basic"].includes(authMethod) ||
-        (metadata.grant_types !== undefined && (!Array.isArray(metadata.grant_types) || !metadata.grant_types.includes("authorization_code"))) ||
+        !Array.isArray(grants) || !grants.includes("authorization_code") ||
+        grants.some((grant: unknown) => grant !== "authorization_code" && grant !== "refresh_token") ||
         (metadata.response_types !== undefined && (!Array.isArray(metadata.response_types) || !metadata.response_types.includes("code")))) {
         return response(400, { error: "invalid_client_metadata" });
       }
@@ -294,10 +391,11 @@ export class MCPAuthServer {
       const id = randomSecret(24);
       const secret = authMethod === "none" ? undefined : randomSecret(32);
       this.clients.set(id, { redirectURIs: metadata.redirect_uris,
-        authMethod, secretDigest: secret ? await sha256(secret) : undefined });
+        authMethod, grantTypes: grants, secretDigest: secret ? await sha256(secret) : undefined });
+      this.persistState();
       return response(201, {
         client_id: id, redirect_uris: metadata.redirect_uris,
-        grant_types: ["authorization_code"], response_types: ["code"],
+        grant_types: grants, response_types: ["code"],
         token_endpoint_auth_method: authMethod, client_id_issued_at: Math.floor(Date.now() / 1000),
         ...(secret ? { client_secret: secret, client_secret_expires_at: 0 } : {}),
       });
@@ -326,7 +424,10 @@ export class MCPAuthServer {
       return { status: 302, statusText: "Found", headers: { Location: target.toString(), "Cache-Control": "no-store" }, body: "" };
     }
     if (path === "/oauth/token") {
-      if (form.get("grant_type") !== "authorization_code") return response(400, { error: "unsupported_grant_type" });
+      const grantType = form.get("grant_type");
+      if (grantType !== "authorization_code" && grantType !== "refresh_token") {
+        return response(400, { error: "unsupported_grant_type" });
+      }
       let id = form.get("client_id") || "";
       let secret = form.get("client_secret") || "";
       let presented = secret ? "client_secret_post" : "none";
@@ -346,6 +447,21 @@ export class MCPAuthServer {
           (client.secretDigest && !constantTimeEqual(await sha256(secret), client.secretDigest))) {
         return response(401, { error: "invalid_client" });
       }
+      if (grantType === "refresh_token") {
+        if (!client.grantTypes.includes("refresh_token")) return response(400, { error: "unauthorized_client" });
+        const provided = form.get("refresh_token") || "";
+        if (!/^[0-9a-f]{64}$/.test(provided)) return response(400, { error: "invalid_grant" });
+        const digest = await sha256(`refresh:${provided}`);
+        const previous = this.refreshTokens.get(digest);
+        if (!previous || previous.expires <= Date.now() || previous.clientID !== id ||
+            previous.resource !== (form.get("resource") || resource)) {
+          return response(400, { error: "invalid_grant" });
+        }
+        // Rotate in one turn: a second use of the same refresh token fails.
+        this.refreshTokens.delete(digest);
+        this.persistState();
+        return this.issueTokens(id, previous.resource);
+      }
       const code = form.get("code") || "";
       const saved = this.codes.get(code);
       this.codes.delete(code); // One-time, even for invalid token requests.
@@ -358,10 +474,8 @@ export class MCPAuthServer {
       const challenge = globalThis.btoa(String.fromCharCode(...new Uint8Array(challengeRaw)))
         .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
       if (!constantTimeEqual(challenge, saved.challenge)) return response(400, { error: "invalid_grant" });
-      while (this.tokens.size >= MAX_TOKENS) this.tokens.delete(this.tokens.keys().next().value!);
-      const token = randomSecret(32);
-      this.tokens.set(token, { clientID: id, resource: saved.resource, expires: Date.now() + TOKEN_TTL });
-      return response(200, { access_token: token, token_type: "Bearer", expires_in: TOKEN_TTL / 1000 });
+      // Consume the code exactly once; the new access + refresh tokens are durable.
+      return this.issueTokens(id, saved.resource);
     }
     return response(404, { error: "not_found" });
   }

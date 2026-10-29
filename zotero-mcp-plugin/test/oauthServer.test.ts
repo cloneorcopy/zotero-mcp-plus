@@ -35,7 +35,7 @@ describe("Zotero MCP OAuth (opt-in)", function () {
 
   it("is disabled by default and never accepts an unauthenticated token", async function () {
     expect(server.isEnabled()).to.equal(false);
-    expect(server.isAuthorized("Authorization: Bearer invalid\r\n")).to.equal(false);
+    expect(await server.isAuthorized("Authorization: Bearer invalid\r\n")).to.equal(false);
     const metadata = await server.handleRequest("GET", "/.well-known/oauth-protected-resource", new URLSearchParams(), "", "");
     expect(metadata?.status).to.equal(404);
   });
@@ -86,12 +86,30 @@ describe("Zotero MCP OAuth (opt-in)", function () {
     });
     const token = await server.handleRequest("POST", "/oauth/token", new URLSearchParams(), exchange.toString(), HEADERS_FORM);
     expect(token?.status).to.equal(200);
-    const access = JSON.parse(token!.body).access_token;
-    expect(server.isAuthorized(`Authorization: Bearer ${access}\r\n`)).to.equal(true);
+    const issued = JSON.parse(token!.body);
+    const access = issued.access_token;
+    expect(await server.isAuthorized(`Authorization: Bearer ${access}\r\n`)).to.equal(true);
+    const rawState = String(store.get(`${PREFIX}persistentState`));
+    expect(rawState).not.to.contain(access);
+    expect(rawState).not.to.contain(issued.refresh_token);
+    const prefs = { get: (key: string) => store.get(key), set: (key: string, value: unknown) => { store.set(key, value); } };
+    const restarted = new MCPAuthServer(prefs);
+    expect(await restarted.isAuthorized(`Authorization: Bearer ${access}\r\n`)).to.equal(true);
+    const refreshFields = new URLSearchParams({
+      grant_type: "refresh_token", client_id: id,
+      refresh_token: issued.refresh_token, resource: `${BASE}/mcp`,
+    });
+    const renewedResponse = await restarted.handleRequest("POST", "/oauth/token", new URLSearchParams(), refreshFields.toString(), HEADERS_FORM);
+    expect(renewedResponse?.status).to.equal(200);
+    const renewed = JSON.parse(renewedResponse!.body);
+    expect(renewed.refresh_token).not.to.equal(issued.refresh_token);
+    expect(await new MCPAuthServer(prefs).isAuthorized(`Authorization: Bearer ${renewed.access_token}\r\n`)).to.equal(true);
+    const replayRefresh = await restarted.handleRequest("POST", "/oauth/token", new URLSearchParams(), refreshFields.toString(), HEADERS_FORM);
+    expect(replayRefresh?.status).to.equal(400);
     const replay = await server.handleRequest("POST", "/oauth/token", new URLSearchParams(), exchange.toString(), HEADERS_FORM);
     expect(replay?.status).to.equal(400);
 
     await server.generatePassword();
-    expect(server.isAuthorized(`Authorization: Bearer ${access}\r\n`)).to.equal(false);
+    expect(await server.isAuthorized(`Authorization: Bearer ${access}\r\n`)).to.equal(false);
   });
 });

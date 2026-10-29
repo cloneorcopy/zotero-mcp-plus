@@ -440,7 +440,7 @@ export class HttpServer {
             ? await oauthServer.handleRequest(method, path, query, requestBody, headerText)
             : null;
           const authResult = requiresOAuth
-            ? (oauthResult || (!path.startsWith("/ping") && !oauthServer.isAuthorized(headerText)
+            ? (oauthResult || (!path.startsWith("/ping") && !(await oauthServer.isAuthorized(headerText))
                 ? oauthServer.unauthorized() : null))
             : null;
           if (authResult) {
