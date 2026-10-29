@@ -17,12 +17,17 @@ async function challenge(verifier: string): Promise<string> {
 describe("Zotero MCP OAuth (opt-in)", function () {
   let server: MCPAuthServer;
   const store = new Map<string, unknown>();
+  let vaultPassword: string | null = null;
 
   beforeEach(function () {
     store.clear();
+    vaultPassword = null;
     server = new MCPAuthServer({
       get: (key) => store.get(key),
       set: (key, value) => { store.set(key, value); },
+    }, {
+      read: () => vaultPassword,
+      write: (value) => { vaultPassword = value; },
     });
   });
 
@@ -44,6 +49,12 @@ describe("Zotero MCP OAuth (opt-in)", function () {
     store.set(`${PREFIX}serverUrl`, BASE);
     const password = await server.generatePassword();
     expect(store.get(`${PREFIX}passwordHash`)).not.to.equal(password);
+    expect(await server.getStoredPassword()).to.equal(password);
+    const reloaded = new MCPAuthServer({
+      get: (key) => store.get(key),
+      set: (key, value) => { store.set(key, value); },
+    }, { read: () => vaultPassword, write: (value) => { vaultPassword = value; } });
+    expect(await reloaded.getStoredPassword()).to.equal(password);
     store.set(`${PREFIX}enabled`, true);
 
     const meta = await server.handleRequest("GET", "/.well-known/oauth-protected-resource", new URLSearchParams(), "", "");

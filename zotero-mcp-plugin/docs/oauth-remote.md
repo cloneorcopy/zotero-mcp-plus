@@ -9,7 +9,7 @@ Cloudflare Tunnel transports HTTPS only; no Cloudflare Access service or third-p
 1. Keep **Allow remote access** disabled. The unauthenticated local MCP listener keeps the configured **MCP server port** (default `23120`); when OAuth is enabled that listener is forced to loopback so it is never publicly reachable.
 2. Configure Cloudflare Tunnel to forward `https://zotero.example.com` to `http://127.0.0.1:<mcp-port + 1>` on the *same machine* — the **authenticated** listener, default `23121`. Do **not** point the tunnel at `<mcp-port>` (default `23120`): that listener serves local clients without a token. Replace the example hostname with your own.
 3. Under Zotero MCP preferences, enter `https://zotero.example.com` as the **public HTTPS origin** (without `/mcp`).
-4. Click **Generate / rotate authorization password**. Copy the generated password now; only its salted SHA-256 digest is stored in Zotero's preferences.
+4. Click **Generate / rotate authorization password**. The password is kept in Zotero's local password manager, so **Show password** and **Copy password** keep working after a restart — the plugin preferences store only its salted SHA-256 digest. Rotating the password invalidates existing authorizations.
 5. Enable **OAuth authorization**. Leave the existing write operations disabled when only reading a literature library.
 6. In a ChatGPT workspace that permits custom remote MCP, connect the Streamable HTTP URL `https://zotero.example.com/mcp`. Use OAuth, and enter the generated password on the authorization page.
 

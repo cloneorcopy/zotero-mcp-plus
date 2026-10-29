@@ -49,6 +49,16 @@ type PreferenceStore = {
   set(key: string, value: unknown, global?: boolean): void;
 };
 
+/** Injected only for tests; production uses the Zotero profile Login Manager. */
+type PasswordVault = {
+  read(): string | null;
+  write(value: string): void;
+};
+
+const PASSWORD_ORIGIN = "https://zotero-mcp-plugin.invalid";
+const PASSWORD_REALM = "Zotero MCP authorization password";
+const PASSWORD_USERNAME = "oauth-admin";
+
 function randomSecret(bytes = 32): string {
   const data = new Uint8Array(bytes);
   globalThis.crypto.getRandomValues(data);
@@ -136,9 +146,45 @@ function header(text: string, name: string): string {
 
 export class MCPAuthServer {
   private readonly settings?: PreferenceStore;
+  private readonly vault?: PasswordVault;
 
-  constructor(settings?: PreferenceStore) {
+  constructor(settings?: PreferenceStore, vault?: PasswordVault) {
     this.settings = settings;
+    this.vault = vault;
+  }
+
+  /** Zotero's profile Login Manager keeps recoverable credentials out of plain preferences. */
+  private readPasswordFromVault(): string | null {
+    if (this.vault) return this.vault.read();
+    const manager = Cc["@mozilla.org/login-manager;1"].getService(Ci.nsILoginManager);
+    // nsILoginManager accepts null for the unset fields; the bundled typings
+    // declare strings, so the calls are widened here rather than padded with "".
+    const logins = manager.findLogins(PASSWORD_ORIGIN, null as any, PASSWORD_REALM);
+    const login = Array.from(logins as unknown as Array<{username: string; password: string}>)
+      .find(item => item.username === PASSWORD_USERNAME);
+    return login?.password || null;
+  }
+
+  private writePasswordToVault(value: string): void {
+    if (this.vault) { this.vault.write(value); return; }
+    const manager = Cc["@mozilla.org/login-manager;1"].getService(Ci.nsILoginManager);
+    const logins = manager.findLogins(PASSWORD_ORIGIN, null as any, PASSWORD_REALM);
+    const existing = (Array.from(logins as unknown as Array<{username: string}>)
+      .find(item => item.username === PASSWORD_USERNAME)) as nsILoginInfo | undefined;
+    const info = Cc["@mozilla.org/login-manager/loginInfo;1"].createInstance(Ci.nsILoginInfo);
+    info.init(PASSWORD_ORIGIN, null as any, PASSWORD_REALM, PASSWORD_USERNAME, value, "", "");
+    if (existing) manager.modifyLogin(existing, info);
+    else (manager as any).addLogin(info);
+  }
+
+  /** Returns the existing password only after validating it against the saved digest. */
+  async getStoredPassword(): Promise<string | null> {
+    if (!this.configured()) return null;
+    const saved = this.readPasswordFromVault();
+    if (!saved) return null;
+    const salt = this.pref("passwordSalt") as string;
+    const expected = this.pref("passwordHash") as string;
+    return constantTimeEqual(await sha256(`${salt}:${saved}`), expected) ? saved : null;
   }
 
   private pref(name: string): unknown {
@@ -241,6 +287,8 @@ export class MCPAuthServer {
     const password = randomSecret(32);
     const salt = randomSecret(16);
     const digest = await sha256(`${salt}:${password}`);
+    // Save the recoverable secret first; storage failure must not rotate credentials.
+    this.writePasswordToVault(password);
     this.setPref("passwordSalt", salt);
     this.setPref("passwordHash", digest);
     this.syncSettings();

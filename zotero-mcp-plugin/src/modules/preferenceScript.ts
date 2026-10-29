@@ -80,20 +80,70 @@ function bindHtmlSelect(doc: Document, selector: string, prefKey: string) {
   });
 }
 
-/** OAuth is opt-in. Passwords are shown only once and stored as salted digests. */
+/** OAuth is opt-in; the password can be viewed/copied from local credential storage. */
 function bindOAuthPreferences(doc: Document) {
   const prefix = "extensions.zotero.zotero-mcp-plugin.oauth";
   const enabled = doc.querySelector("#zotero-mcp-oauth-enabled") as HTMLInputElement;
   const serverUrl = doc.querySelector("#zotero-mcp-oauth-url") as HTMLInputElement;
   const generate = doc.querySelector("#zotero-mcp-oauth-generate") as HTMLButtonElement;
   const password = doc.querySelector("#zotero-mcp-oauth-password") as HTMLInputElement;
+  const showPassword = doc.querySelector("#zotero-mcp-oauth-show") as HTMLButtonElement;
+  const hidePassword = doc.querySelector("#zotero-mcp-oauth-hide") as HTMLButtonElement;
+  const copyPassword = doc.querySelector("#zotero-mcp-oauth-copy") as HTMLButtonElement;
   const settings = doc.querySelector("#zotero-mcp-oauth-settings") as HTMLElement;
-  if (!enabled || !serverUrl || !generate || !password || !settings) return;
+  if (!enabled || !serverUrl || !generate || !password ||
+      !showPassword || !hidePassword || !copyPassword || !settings) return;
 
   enabled.checked = oauthServer.isEnabled();
   serverUrl.value = String(Zotero.Prefs.get(`${prefix}.serverUrl`, true) || "");
   // Keep the URL/password controls visible while disabled, so OAuth can be configured before enabling.
   settings.style.display = "";
+
+  const resetPasswordDisplay = () => {
+    password.type = "password";
+    password.value = "";
+    showPassword.style.display = "";
+    hidePassword.style.display = "none";
+    showPassword.disabled = !oauthServer.configured();
+    copyPassword.disabled = !oauthServer.configured();
+  };
+  const recoverPassword = async (): Promise<string | null> => {
+    try {
+      const stored = await oauthServer.getStoredPassword();
+      if (stored) return stored;
+      addon.data.prefs!.window.alert(
+        "The previous password was saved as a one-way hash and cannot be recovered. " +
+        "Generate a new password once; after that you can view and copy it without rotation."
+      );
+    } catch (error) {
+      addon.data.prefs!.window.alert(`Unable to access local password storage: ${error}`);
+    }
+    return null;
+  };
+  resetPasswordDisplay();
+
+  showPassword.addEventListener("click", async () => {
+    const stored = await recoverPassword();
+    if (!stored) return;
+    password.value = stored;
+    password.type = "text";
+    showPassword.style.display = "none";
+    hidePassword.style.display = "";
+  });
+
+  hidePassword.addEventListener("click", () => {
+    password.type = "password";
+    showPassword.style.display = "";
+    hidePassword.style.display = "none";
+  });
+
+  copyPassword.addEventListener("click", async () => {
+    const stored = await recoverPassword();
+    if (!stored) return;
+    if (!await ClientConfigGenerator.copyToClipboard(stored)) {
+      addon.data.prefs!.window.alert("Unable to copy automatically. Use Show password to copy manually.");
+    }
+  });
 
   serverUrl.addEventListener("change", () => {
     const origin = normalizeOAuthOrigin(serverUrl.value.trim());
@@ -110,7 +160,11 @@ function bindOAuthPreferences(doc: Document) {
     generate.disabled = true;
     try {
       password.value = await oauthServer.generatePassword();
-      password.type = "text"; // The newly generated password is shown once for copying.
+      password.type = "text";
+      showPassword.style.display = "none";
+      hidePassword.style.display = "";
+      showPassword.disabled = false;
+      copyPassword.disabled = false;
     } catch (error) {
       addon.data.prefs!.window.alert(`Cannot generate OAuth password: ${error}`);
     } finally {
