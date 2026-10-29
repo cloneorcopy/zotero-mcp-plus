@@ -438,15 +438,13 @@ export class HttpServer {
             ? await oauthServer.handleRequest(method, path, query, requestBody, headerText)
             : null;
           const authResult = requiresOAuth
-            ? (oauthResult || (!path.startsWith("/ping") && !oauthServer.isAuthorized(headerText)
+            ? (oauthResult || (!path.startsWith("/ping") && !(await oauthServer.isAuthorized(headerText))
                 ? oauthServer.unauthorized() : null))
             : null;
           if (authResult) {
             const authBody = authResult.body || "";
             const authHeaders = this.buildHttpHeaders(authResult, false) +
-              `Content-Length: ${getByteLength(authBody)}
-
-`;
+              `Content-Length: ${getByteLength(authBody)}\r\n\r\n`;
             output.write(authHeaders, authHeaders.length);
             if (authBody) writeStringToStream(output, authBody);
             return;
