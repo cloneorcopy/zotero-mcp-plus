@@ -23,7 +23,7 @@ Do not expose either local port — the unauthenticated `<mcp-port>` (default `2
 - `GET /oauth/authorize`, `POST /oauth/authorize` (password login + S256 PKCE)
 - `POST /oauth/token` (`authorization_code`, opaque Bearer token, 24-hour TTL)
 
-Authorization codes expire after 5 minutes and are single-use. Client registrations, pending codes and opaque access tokens are held in memory. Restarting Zotero invalidates issued tokens and requires reauthorization. These are deliberate small-scope choices, consistent with the process-local registry mode of the reference project.
+Authorization codes expire after 5 minutes and are single-use; pending codes are held in memory, so an interrupted consent restarts rather than resumes. Client registrations, opaque access tokens and rotating refresh tokens persist in the `oauth.persistentState` preference, bound to the configured public origin and the current password digest: a normal Zotero restart keeps them valid, while changing the origin or the password revokes every client and session. Refresh tokens live 30 days and rotate on every use.
 
 OAuth is disabled by default. When it is enabled but incompletely configured, the MCP endpoint fails closed (HTTP 401). Unauthenticated MCP calls return a `WWW-Authenticate: Bearer` challenge with a resource metadata link. OAuth endpoints are unauthenticated as required for client registration and sign-in; `/ping` remains a public health check.
 
@@ -36,6 +36,14 @@ curl -i "$BASE/.well-known/oauth-authorization-server"
 curl -i -X POST "$BASE/mcp" -H 'Content-Type: application/json' \
   --data '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 # Without a valid OAuth access token the last call MUST return HTTP 401.
+```
+
+### Automated end-to-end check
+
+`scripts/verify-oauth.mjs` exercises the full flow against a running Zotero: discovery metadata, anonymous and forged-token rejection, unsafe-redirect rejection, dynamic registration, the authorize page, wrong-password refusal, password login, code exchange, an authenticated `tools/list` call, and single-use code replay rejection. It never prints the password and exits non-zero on the first failed expectation.
+
+```bash
+node scripts/verify-oauth.mjs --password <authorization password> [--base http://127.0.0.1:23120]
 ```
 
 Do not publish the login password or an access token in Git, screenshots, logs, or public discussions.
