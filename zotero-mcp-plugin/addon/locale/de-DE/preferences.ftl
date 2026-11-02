@@ -244,3 +244,6 @@ pref-oauth-show = Passwort anzeigen
 pref-oauth-hide = Passwort verbergen
 pref-oauth-copy = Passwort kopieren
 pref-oauth-password-hint = Das Passwort wird im lokalen Zotero-Passwortmanager gespeichert und kann angezeigt oder kopiert werden. Das Erneuern widerruft bestehende Autorisierungen.
+pref-oauth-custom-label = Eigenes Autorisierungspasswort festlegen
+pref-oauth-custom-save = Passwort speichern
+pref-oauth-custom-hint = Eigenes Passwort eingeben (mindestens 16 Zeichen empfohlen). Änderungen widerrufen alte Autorisierungen; dasselbe Passwort bleibt gültig.

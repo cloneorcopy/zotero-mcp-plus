@@ -244,3 +244,6 @@ pref-oauth-show = Afficher le mot de passe
 pref-oauth-hide = Masquer le mot de passe
 pref-oauth-copy = Copier le mot de passe
 pref-oauth-password-hint = Le mot de passe est conservé dans le gestionnaire local de Zotero. Vous pouvez le voir ou le copier. Le renouveler révoque les autorisations.
+pref-oauth-custom-label = Définir votre propre mot de passe
+pref-oauth-custom-save = Enregistrer le mot de passe
+pref-oauth-custom-hint = Choisissez un mot de passe (16 caractères ou plus recommandés). Un changement révoque les anciennes autorisations; le même mot de passe les conserve.

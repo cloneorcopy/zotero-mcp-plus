@@ -229,3 +229,6 @@ pref-oauth-show = Mostrar contraseña
 pref-oauth-hide = Ocultar contraseña
 pref-oauth-copy = Copiar contraseña
 pref-oauth-password-hint = La contraseña se guarda en el gestor local de contraseñas de Zotero y puede verse o copiarse. Cambiarla revoca las autorizaciones anteriores.
+pref-oauth-custom-label = Establecer contraseña de autorización propia
+pref-oauth-custom-save = Guardar contraseña
+pref-oauth-custom-hint = Introduce una contraseña (se recomiendan 16 caracteres o más). Los cambios revocan autorizaciones anteriores; guardar la misma no las revoca.

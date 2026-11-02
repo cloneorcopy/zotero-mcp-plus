@@ -244,3 +244,6 @@ pref-oauth-show = Show password
 pref-oauth-hide = Hide password
 pref-oauth-copy = Copy password
 pref-oauth-password-hint = The authorization password is stored in the Zotero local password manager. You can view or copy it at any time; rotating revokes authorized clients.
+pref-oauth-custom-label = Set your own authorization password
+pref-oauth-custom-save = Save password
+pref-oauth-custom-hint = Enter any password you choose (16+ characters recommended). Saving a different password revokes old authorizations; saving the same password does not.

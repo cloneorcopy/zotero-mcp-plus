@@ -87,11 +87,14 @@ function bindOAuthPreferences(doc: Document) {
   const serverUrl = doc.querySelector("#zotero-mcp-oauth-url") as HTMLInputElement;
   const generate = doc.querySelector("#zotero-mcp-oauth-generate") as HTMLButtonElement;
   const password = doc.querySelector("#zotero-mcp-oauth-password") as HTMLInputElement;
+  const customPassword = doc.querySelector("#zotero-mcp-oauth-custom-password") as HTMLInputElement;
+  const saveCustomPassword = doc.querySelector("#zotero-mcp-oauth-custom-save") as HTMLButtonElement;
   const showPassword = doc.querySelector("#zotero-mcp-oauth-show") as HTMLButtonElement;
   const hidePassword = doc.querySelector("#zotero-mcp-oauth-hide") as HTMLButtonElement;
   const copyPassword = doc.querySelector("#zotero-mcp-oauth-copy") as HTMLButtonElement;
   const settings = doc.querySelector("#zotero-mcp-oauth-settings") as HTMLElement;
   if (!enabled || !serverUrl || !generate || !password ||
+      !customPassword || !saveCustomPassword ||
       !showPassword || !hidePassword || !copyPassword || !settings) return;
 
   enabled.checked = oauthServer.isEnabled();
@@ -156,6 +159,30 @@ function bindOAuthPreferences(doc: Document) {
     Zotero.Prefs.set(`${prefix}.serverUrl`, origin, true);
   });
 
+  // Editing does not affect a working authorization until Save is clicked.
+  saveCustomPassword.addEventListener("click", async () => {
+    const chosen = customPassword.value;
+    if (!chosen) {
+      addon.data.prefs!.window.alert("Enter a custom OAuth authorization password first.");
+      return;
+    }
+    saveCustomPassword.disabled = true;
+    try {
+      await oauthServer.setPassword(chosen);
+      password.value = chosen;
+      password.type = "text";
+      customPassword.value = "";
+      showPassword.style.display = "none";
+      hidePassword.style.display = "";
+      showPassword.disabled = false;
+      copyPassword.disabled = false;
+    } catch (error) {
+      addon.data.prefs!.window.alert(`Cannot save custom OAuth password: ${error}`);
+    } finally {
+      saveCustomPassword.disabled = false;
+    }
+  });
+
   generate.addEventListener("click", async () => {
     generate.disabled = true;
     try {
@@ -175,7 +202,7 @@ function bindOAuthPreferences(doc: Document) {
   enabled.addEventListener("change", () => {
     if (enabled.checked && !oauthServer.configured()) {
       enabled.checked = false;
-      addon.data.prefs!.window.alert("Configure the HTTPS public origin and generate an authorization password first.");
+      addon.data.prefs!.window.alert("Configure the HTTPS public origin and set or generate an authorization password first.");
       return;
     }
     Zotero.Prefs.set(`${prefix}.enabled`, enabled.checked, true);

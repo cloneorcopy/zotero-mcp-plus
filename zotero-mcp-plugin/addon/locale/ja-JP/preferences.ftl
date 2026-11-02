@@ -229,3 +229,6 @@ pref-oauth-show = パスワードを表示
 pref-oauth-hide = パスワードを隠す
 pref-oauth-copy = パスワードをコピー
 pref-oauth-password-hint = 認証パスワードは Zotero のローカルパスワード管理機能に保存され、いつでも表示・コピーできます。再生成すると既存の認証は無効になります。
+pref-oauth-custom-label = 認可パスワードを手動設定
+pref-oauth-custom-save = パスワードを保存
+pref-oauth-custom-hint = 任意のパスワードを設定できます（16文字以上を推奨）。別のパスワードに変更すると以前の認可が無効になります。

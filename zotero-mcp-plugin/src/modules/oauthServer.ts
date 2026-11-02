@@ -51,8 +51,8 @@ type PreferenceStore = {
 
 /** Injected only for tests; production uses the Zotero profile Login Manager. */
 type PasswordVault = {
-  read(): string | null;
-  write(value: string): void;
+  read(): string | null | Promise<string | null>;
+  write(value: string): void | Promise<void>;
 };
 
 const PASSWORD_ORIGIN = "https://zotero-mcp-plugin.invalid";
@@ -153,34 +153,50 @@ export class MCPAuthServer {
     this.vault = vault;
   }
 
-  /** Zotero's profile Login Manager keeps recoverable credentials out of plain preferences. */
-  private readPasswordFromVault(): string | null {
-    if (this.vault) return this.vault.read();
-    const manager = Cc["@mozilla.org/login-manager;1"].getService(Ci.nsILoginManager);
-    // nsILoginManager accepts null for the unset fields; the bundled typings
-    // declare strings, so the calls are widened here rather than padded with "".
-    const logins = manager.findLogins(PASSWORD_ORIGIN, null as any, PASSWORD_REALM);
-    const login = Array.from(logins as unknown as Array<{username: string; password: string}>)
-      .find(item => item.username === PASSWORD_USERNAME);
+  /** Recoverable password lives in Zotero's profile Login Manager. */
+  private async readPasswordFromVault(): Promise<string | null> {
+    if (this.vault) return await this.vault.read();
+    const manager = Cc["@mozilla.org/login-manager;1"].getService(Ci.nsILoginManager) as any;
+    const logins: nsILoginInfo[] = typeof manager.searchLoginsAsync === "function"
+      ? await manager.searchLoginsAsync({ origin: PASSWORD_ORIGIN, httpRealm: PASSWORD_REALM })
+      : manager.findLogins(PASSWORD_ORIGIN, null, PASSWORD_REALM);
+    const login = logins.find((item) => item.username === PASSWORD_USERNAME);
     return login?.password || null;
   }
 
-  private writePasswordToVault(value: string): void {
-    if (this.vault) { this.vault.write(value); return; }
-    const manager = Cc["@mozilla.org/login-manager;1"].getService(Ci.nsILoginManager);
-    const logins = manager.findLogins(PASSWORD_ORIGIN, null as any, PASSWORD_REALM);
-    const existing = (Array.from(logins as unknown as Array<{username: string}>)
-      .find(item => item.username === PASSWORD_USERNAME)) as nsILoginInfo | undefined;
+  private async writePasswordToVault(value: string): Promise<void> {
+    if (this.vault) { await this.vault.write(value); return; }
+    const manager = Cc["@mozilla.org/login-manager;1"].getService(Ci.nsILoginManager) as any;
+    const logins: nsILoginInfo[] = typeof manager.searchLoginsAsync === "function"
+      ? await manager.searchLoginsAsync({ origin: PASSWORD_ORIGIN, httpRealm: PASSWORD_REALM })
+      : manager.findLogins(PASSWORD_ORIGIN, null, PASSWORD_REALM);
+    const existing = logins.find((item) => item.username === PASSWORD_USERNAME);
     const info = Cc["@mozilla.org/login-manager/loginInfo;1"].createInstance(Ci.nsILoginInfo);
+    // nsILoginInfo.init declares a string formSubmitURL; Zotero accepts null.
     info.init(PASSWORD_ORIGIN, null as any, PASSWORD_REALM, PASSWORD_USERNAME, value, "", "");
-    if (existing) manager.modifyLogin(existing, info);
-    else (manager as any).addLogin(info);
+    if (existing) {
+      if (typeof manager.modifyLoginAsync === "function") {
+        await manager.modifyLoginAsync(existing, info);
+      } else if (typeof manager.modifyLogin === "function") {
+        manager.modifyLogin(existing, info);
+      } else {
+        throw new Error("Zotero Login Manager cannot update an existing password");
+      }
+    } else {
+      if (typeof manager.addLoginAsync === "function") {
+        await manager.addLoginAsync(info);
+      } else if (typeof manager.addLogin === "function") {
+        manager.addLogin(info);
+      } else {
+        throw new Error("Zotero Login Manager cannot save a password");
+      }
+    }
   }
 
   /** Returns the existing password only after validating it against the saved digest. */
   async getStoredPassword(): Promise<string | null> {
     if (!this.configured()) return null;
-    const saved = this.readPasswordFromVault();
+    const saved = await this.readPasswordFromVault();
     if (!saved) return null;
     const salt = this.pref("passwordSalt") as string;
     const expected = this.pref("passwordHash") as string;
@@ -282,16 +298,38 @@ export class MCPAuthServer {
     this.persistState();
   }
 
-  /** Only the newly generated password is displayed; Zotero stores its salted digest. */
-  async generatePassword(): Promise<string> {
-    const password = randomSecret(32);
+  /**
+   * Configure the OAuth login password explicitly (like coding-tools-mcp's
+   * CODING_TOOLS_MCP_OAUTH_PASSWORD). OAuth authorization codes remain
+   * short-lived and automatically generated; only the login password is user-set.
+   * A write failure cannot revoke the previous working password.
+   */
+  async setPassword(password: string): Promise<void> {
+    if (typeof password !== "string" || password.length < 1 || password.length > 256 ||
+        /[\u0000-\u001f\u007f]/.test(password)) {
+      throw new Error("Authorization password must contain 1-256 characters and no control characters");
+    }
+    const currentSalt = this.pref("passwordSalt");
+    const currentHash = this.pref("passwordHash");
+    if (typeof currentSalt === "string" && typeof currentHash === "string" &&
+        constantTimeEqual(await sha256(`${currentSalt}:${password}`), currentHash)) {
+      // Re-save in the local vault, e.g. when migrating from a hash-only version.
+      // No credential change => do not revoke active clients or tokens.
+      await this.writePasswordToVault(password);
+      return;
+    }
     const salt = randomSecret(16);
     const digest = await sha256(`${salt}:${password}`);
-    // Save the recoverable secret first; storage failure must not rotate credentials.
-    this.writePasswordToVault(password);
+    await this.writePasswordToVault(password);
     this.setPref("passwordSalt", salt);
     this.setPref("passwordHash", digest);
     this.syncSettings();
+  }
+
+  /** Random generation stays available but is never mandatory. */
+  async generatePassword(): Promise<string> {
+    const password = randomSecret(32);
+    await this.setPassword(password);
     return password;
   }
 

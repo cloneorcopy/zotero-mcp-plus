@@ -244,3 +244,6 @@ pref-oauth-show = 显示密码
 pref-oauth-hide = 隐藏密码
 pref-oauth-copy = 复制密码
 pref-oauth-password-hint = 授权密码保存在 Zotero 本地密码管理器中。可随时显示或复制；重新生成会撤销已授权的客户端。
+pref-oauth-custom-label = 自定义 OAuth 授权密码
+pref-oauth-custom-save = 保存密码
+pref-oauth-custom-hint = 可自行设置密码（建议至少 16 位）。保存不同密码将撤销旧授权；保存相同密码不会影响现有授权。

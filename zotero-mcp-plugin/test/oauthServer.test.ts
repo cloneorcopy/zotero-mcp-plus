@@ -31,6 +31,28 @@ describe("Zotero MCP OAuth (opt-in)", function () {
     });
   });
 
+  it("supports manually chosen passwords and preserves unchanged authorization state", async function () {
+    store.set(`${PREFIX}serverUrl`, BASE);
+    const chosen = "my-personally-chosen-authorization-password";
+    await server.setPassword(chosen);
+    expect(await server.getStoredPassword()).to.equal(chosen);
+    const firstHash = store.get(`${PREFIX}passwordHash`);
+    const initialMeta = await server.handleRequest("GET", "/.well-known/oauth-authorization-server", new URLSearchParams(), "", "");
+    expect(initialMeta?.status).to.equal(404); // OAuth remains disabled until toggled.
+    await server.setPassword(chosen);
+    expect(store.get(`${PREFIX}passwordHash`)).to.equal(firstHash);
+    const reloaded = new MCPAuthServer({
+      get: (key) => store.get(key),
+      set: (key, value) => { store.set(key, value); },
+    }, { read: () => vaultPassword, write: (value) => { vaultPassword = value; } });
+    expect(await reloaded.getStoredPassword()).to.equal(chosen);
+    await server.setPassword("my-different-authorization-password");
+    expect(store.get(`${PREFIX}passwordHash`)).not.to.equal(firstHash);
+    expect(await server.getStoredPassword()).to.equal("my-different-authorization-password");
+    try { await server.setPassword(""); throw new Error("Expected validation failure"); }
+    catch (error) { expect(String(error)).to.contain("Authorization password"); }
+  });
+
   it("requires a valid, pinned HTTPS origin", function () {
     expect(normalizeOAuthOrigin(BASE)).to.equal(BASE);
     expect(normalizeOAuthOrigin("http://zotero.example.com")).to.equal(null);
