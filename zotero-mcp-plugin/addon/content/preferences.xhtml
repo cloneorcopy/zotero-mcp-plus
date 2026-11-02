@@ -326,6 +326,25 @@
             <html:button type="button" class="zmp-btn" id="zotero-mcp-oauth-copy" data-l10n-id="pref-oauth-copy"></html:button>
           </html:div>
           <html:div class="zmp-fh" data-l10n-id="pref-oauth-password-hint"></html:div>
+          <html:div class="zmp-fg" style="margin-top:14px">
+            <html:label class="zmp-fl" data-l10n-id="pref-oauth-fixed-title"></html:label>
+            <html:textarea class="zmp-fi" id="zotero-mcp-oauth-import-url" rows="3"
+              style="width:100%;box-sizing:border-box"
+              placeholder="https://your-host/oauth/authorize?response_type=code&amp;client_id=..."></html:textarea>
+            <html:div class="zmp-fh" data-l10n-id="pref-oauth-import-hint"></html:div>
+          </html:div>
+          <html:div class="zmp-fg" style="margin-top:6px">
+            <html:label class="zmp-fl" data-l10n-id="pref-oauth-fixed-id"></html:label>
+            <html:input class="zmp-fi" type="text" id="zotero-mcp-oauth-fixed-id"
+              placeholder="Optional: blank generates a random client_id" />
+            <html:label class="zmp-fl" data-l10n-id="pref-oauth-fixed-redirect"></html:label>
+            <html:input class="zmp-fi" type="url" id="zotero-mcp-oauth-fixed-redirect"
+              placeholder="https://chatgpt.com/connector/oauth/..." />
+            <html:button type="button" class="zmp-btn" id="zotero-mcp-oauth-fixed-save"
+              data-l10n-id="pref-oauth-fixed-save"></html:button>
+            <html:div class="zmp-fh" id="zotero-mcp-oauth-fixed-status" role="status"></html:div>
+            <html:div id="zotero-mcp-oauth-fixed-list" style="margin-top:8px;word-break:break-all"></html:div>
+          </html:div>
         </html:div>
       </html:div>
 

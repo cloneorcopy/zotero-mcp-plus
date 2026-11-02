@@ -53,6 +53,52 @@ describe("Zotero MCP OAuth (opt-in)", function () {
     catch (error) { expect(String(error)).to.contain("Authorization password"); }
   });
 
+  it("supports manually fixed clients and importing ChatGPT authorization URLs across restarts", async function () {
+    store.set(`${PREFIX}serverUrl`, BASE);
+    await server.generatePassword();
+    store.set(`${PREFIX}enabled`, true);
+    const clientID = "chatgpt-fixed-client_01";
+    const redirectURI = "https://chatgpt.com/connector/oauth/example";
+    const authorizationURL = new URL(`${BASE}/oauth/authorize`);
+    authorizationURL.searchParams.set("response_type", "code");
+    authorizationURL.searchParams.set("client_id", clientID);
+    authorizationURL.searchParams.set("redirect_uri", redirectURI);
+    authorizationURL.searchParams.set("code_challenge", "a".repeat(43));
+    authorizationURL.searchParams.set("code_challenge_method", "S256");
+    authorizationURL.searchParams.set("resource", `${BASE}/mcp`);
+    authorizationURL.searchParams.set("state", "must-not-persist");
+
+    const imported = server.importAuthorizeURL(authorizationURL.toString());
+    expect(imported.clientID).to.equal(clientID);
+    expect(imported.reused).to.equal(false);
+    expect(server.importAuthorizeURL(authorizationURL.toString()).reused).to.equal(true);
+    expect(server.listFixedClients()).to.have.length(1);
+    const persisted = String(store.get(`${PREFIX}persistentState`));
+    expect(persisted).not.to.contain("must-not-persist");
+    expect(persisted).not.to.contain("a".repeat(43));
+
+    const reloaded = new MCPAuthServer({
+      get: (key) => store.get(key), set: (key, value) => { store.set(key, value); },
+    });
+    expect(reloaded.listFixedClients()[0].clientID).to.equal(clientID);
+    expect((await reloaded.handleRequest("GET", "/oauth/authorize", authorizationURL.searchParams, "", ""))?.status).to.equal(200);
+    expect(() => reloaded.importAuthorizeURL("https://attacker.invalid/oauth/authorize?" + authorizationURL.search.slice(1))).to.throw();
+    const otherCallback = `${redirectURI}/next`;
+    reloaded.saveFixedClient(clientID, otherCallback);
+    expect(reloaded.listFixedClients()[0].redirectURIs).to.have.length(2);
+    expect(reloaded.removeFixedClient(clientID)).to.equal(true);
+    expect(reloaded.listFixedClients()).to.have.length(0);
+    expect((await reloaded.handleRequest("GET", "/oauth/authorize", authorizationURL.searchParams, "", ""))?.status).to.equal(400);
+  });
+
+  it("generates a random client_id when a manual client ID is omitted", async function () {
+    store.set(`${PREFIX}serverUrl`, BASE);
+    await server.generatePassword();
+    const item = server.saveFixedClient("", CALLBACK);
+    expect(item.clientID).to.match(/^[0-9a-f]{48}$/);
+    expect(server.saveFixedClient(item.clientID, CALLBACK).reused).to.equal(true);
+  });
+
   it("requires a valid, pinned HTTPS origin", function () {
     expect(normalizeOAuthOrigin(BASE)).to.equal(BASE);
     expect(normalizeOAuthOrigin("http://zotero.example.com")).to.equal(null);

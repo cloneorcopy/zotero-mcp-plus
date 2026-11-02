@@ -93,10 +93,17 @@ function bindOAuthPreferences(doc: Document) {
   const hidePassword = doc.querySelector("#zotero-mcp-oauth-hide") as HTMLButtonElement;
   const copyPassword = doc.querySelector("#zotero-mcp-oauth-copy") as HTMLButtonElement;
   const settings = doc.querySelector("#zotero-mcp-oauth-settings") as HTMLElement;
+  const authorizationURL = doc.querySelector("#zotero-mcp-oauth-import-url") as HTMLTextAreaElement;
+  const fixedID = doc.querySelector("#zotero-mcp-oauth-fixed-id") as HTMLInputElement;
+  const fixedRedirect = doc.querySelector("#zotero-mcp-oauth-fixed-redirect") as HTMLInputElement;
+  const saveFixed = doc.querySelector("#zotero-mcp-oauth-fixed-save") as HTMLButtonElement;
+  const fixedStatus = doc.querySelector("#zotero-mcp-oauth-fixed-status") as HTMLElement;
+  const fixedList = doc.querySelector("#zotero-mcp-oauth-fixed-list") as HTMLElement;
   if (!enabled || !serverUrl || !generate || !password ||
       !customPassword || !saveCustomPassword ||
       !showPassword || !hidePassword || !copyPassword || !settings) return;
 
+  if (!authorizationURL || !fixedID || !fixedRedirect || !saveFixed || !fixedStatus || !fixedList) return;
   enabled.checked = oauthServer.isEnabled();
   serverUrl.value = String(Zotero.Prefs.get(`${prefix}.serverUrl`, true) || "");
   // Keep the URL/password controls visible while disabled, so OAuth can be configured before enabling.
@@ -147,6 +154,66 @@ function bindOAuthPreferences(doc: Document) {
       addon.data.prefs!.window.alert("Unable to copy automatically. Use Show password to copy manually.");
     }
   });
+
+  // Fixed clients are configured only from the Zotero preferences UI.
+  // Never auto-register a client from an incoming remote OAuth request.
+  const renderFixedClients = () => {
+    fixedList.textContent = "";
+    for (const client of oauthServer.listFixedClients()) {
+      const row = doc.createElementNS("http://www.w3.org/1999/xhtml", "div") as HTMLElement;
+      row.style.cssText = "display:flex;gap:8px;align-items:center;margin-top:6px";
+      const description = doc.createElementNS("http://www.w3.org/1999/xhtml", "span") as HTMLElement;
+      description.style.cssText = "flex:1;overflow-wrap:anywhere;font-size:12px";
+      description.textContent = `${client.clientID} — ${client.redirectURIs.join(", ")}`;
+      const remove = doc.createElementNS("http://www.w3.org/1999/xhtml", "button") as HTMLButtonElement;
+      remove.setAttribute("type", "button");
+      remove.setAttribute("class", "zmp-btn");
+      remove.setAttribute("data-l10n-id", "pref-oauth-fixed-remove");
+      remove.textContent = "Remove";
+      remove.addEventListener("click", () => {
+        if (!addon.data.prefs!.window.confirm(`Remove OAuth client ${client.clientID} and revoke its tokens?`)) return;
+        try {
+          oauthServer.removeFixedClient(client.clientID);
+          fixedStatus.textContent = "Client removed; its tokens have been revoked.";
+          renderFixedClients();
+        } catch (error) { fixedStatus.textContent = String(error); }
+      });
+      row.append(description, remove);
+      fixedList.appendChild(row);
+    }
+  };
+
+  const importAuthorizeURL = () => {
+    const input = authorizationURL.value.trim();
+    if (!input) return;
+    try {
+      const item = oauthServer.importAuthorizeURL(input);
+      fixedID.value = item.clientID;
+      fixedRedirect.value = new URL(input).searchParams.get("redirect_uri") || "";
+      authorizationURL.value = ""; // Never keep PKCE/state parameters in preferences.
+      fixedStatus.textContent = item.reused ? "Existing client reused." : "Fixed client saved.";
+      renderFixedClients();
+    } catch (error) {
+      fixedStatus.textContent = `Cannot import authorization URL: ${error}`;
+    }
+  };
+
+  // Pasting a complete URL immediately imports a persistent client binding.
+  authorizationURL.addEventListener("input", () => {
+    if (/^https:\/\/[^\s]+\/oauth\/authorize\?/.test(authorizationURL.value.trim())) {
+      importAuthorizeURL();
+    }
+  });
+  authorizationURL.addEventListener("change", importAuthorizeURL);
+  saveFixed.addEventListener("click", () => {
+    try {
+      const item = oauthServer.saveFixedClient(fixedID.value, fixedRedirect.value);
+      fixedID.value = item.clientID;
+      fixedStatus.textContent = item.reused ? "Existing client reused." : "Fixed client saved.";
+      renderFixedClients();
+    } catch (error) { fixedStatus.textContent = `Cannot save OAuth client: ${error}`; }
+  });
+  renderFixedClients();
 
   serverUrl.addEventListener("change", () => {
     const origin = normalizeOAuthOrigin(serverUrl.value.trim());

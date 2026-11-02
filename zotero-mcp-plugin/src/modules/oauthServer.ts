@@ -28,6 +28,7 @@ type Client = {
   authMethod: "none" | "client_secret_post" | "client_secret_basic";
   secretDigest?: string;
   grantTypes: string[];
+  fixed?: boolean; // Operator-managed registration, not a DCR-generated client.
 };
 
 type PendingCode = {
@@ -267,11 +268,12 @@ export class MCPAuthServer {
             for (const entry of saved.clients.slice(0, MAX_CLIENTS)) {
               if (!Array.isArray(entry) || entry.length !== 2) continue;
               const [clientID, client] = entry;
-              if (typeof clientID !== "string" || !/^[0-9a-f]{48}$/.test(clientID) ||
+              if (typeof clientID !== "string" || !/^[A-Za-z0-9._~-]{1,128}$/.test(clientID) ||
                   !client || !validRedirects(client.redirectURIs) ||
                   !["none", "client_secret_post", "client_secret_basic"].includes(client.authMethod) ||
                   !Array.isArray(client.grantTypes) || !client.grantTypes.includes("authorization_code") ||
                   client.grantTypes.some((g: unknown) => g !== "authorization_code" && g !== "refresh_token") ||
+                   (client.fixed !== undefined && typeof client.fixed !== "boolean") ||
                   (client.authMethod === "none" ? client.secretDigest !== undefined :
                     typeof client.secretDigest !== "string" || !/^[0-9a-f]{64}$/.test(client.secretDigest))) continue;
               this.clients.set(clientID, client);
@@ -331,6 +333,86 @@ export class MCPAuthServer {
     const password = randomSecret(32);
     await this.setPassword(password);
     return password;
+  }
+
+  /**
+   * Operator-only configuration. Never invoke this from a remote HTTP endpoint.
+   * A blank client ID generates a stable random ID for a manually registered client;
+   * the standard DCR endpoint also continues to generate random IDs by default.
+   */
+  saveFixedClient(clientID: string, redirectURI: string): { clientID: string; redirectURIs: string[]; reused: boolean } {
+    if (!this.configured()) throw new Error("Configure the public HTTPS origin and authorization password first.");
+    this.syncSettings();
+    const id = clientID.trim() || randomSecret(24);
+    const redirect = redirectURI.trim();
+    if (!/^[A-Za-z0-9._~-]{1,128}$/.test(id)) throw new Error("Invalid client_id (use 1-128 URL-safe characters).");
+    if (!validRedirects([redirect])) throw new Error("Invalid redirect_uri: HTTPS or a loopback HTTP callback is required.");
+    const existing = this.clients.get(id);
+    if (!existing && this.clients.size >= MAX_CLIENTS) throw new Error("OAuth client registration limit reached.");
+    if (existing && existing.authMethod !== "none") {
+      throw new Error("The client_id is already registered with a client secret; it cannot be imported as a public client.");
+    }
+    const redirects = existing ? [...new Set([...existing.redirectURIs, redirect])] : [redirect];
+    if (!validRedirects(redirects)) throw new Error("Too many or invalid callback URLs for this client_id.");
+    if (existing?.fixed === true && existing.redirectURIs.includes(redirect)) {
+      return {clientID: id, redirectURIs: [...redirects], reused: true};
+    }
+    const updated: Client = existing
+      ? { ...existing, fixed: true, redirectURIs: redirects }
+      : { authMethod: "none", grantTypes: ["authorization_code", "refresh_token"],
+          redirectURIs: redirects, fixed: true };
+    this.clients.set(id, updated);
+    try { this.persistState(); }
+    catch (error) {
+      if (existing) this.clients.set(id, existing);
+      else this.clients.delete(id);
+      throw error;
+    }
+    return {clientID: id, redirectURIs: [...redirects], reused: Boolean(existing)};
+  }
+
+  /** Parse an OAuth authorize URL locally, without storing PKCE/state or reusing an expired request. */
+  importAuthorizeURL(rawURL: string): { clientID: string; redirectURIs: string[]; reused: boolean } {
+    const origin = this.origin();
+    if (!origin) throw new Error("Set your public HTTPS origin first.");
+    let url: URL;
+    try { url = new URL(rawURL.trim()); }
+    catch { throw new Error("Paste a complete OAuth authorization URL."); }
+    if (url.origin !== origin || url.pathname !== "/oauth/authorize" || url.hash || url.username || url.password) {
+      throw new Error("The authorization URL must belong to the configured Zotero OAuth origin.");
+    }
+    const query = url.searchParams;
+    const clientID = query.get("client_id") || "";
+    const redirectURI = query.get("redirect_uri") || "";
+    if (!clientID) throw new Error("The authorization URL has no client_id.");
+    if (query.get("response_type") !== "code" || query.get("code_challenge_method") !== "S256" ||
+        !/^[A-Za-z0-9_-]{43}$/.test(query.get("code_challenge") || "")) {
+      throw new Error("The URL is missing required Authorization Code + PKCE parameters.");
+    }
+    if (query.has("resource") && query.get("resource") !== this.resource()) {
+      throw new Error("The OAuth resource does not match this Zotero MCP server.");
+    }
+    return this.saveFixedClient(clientID, redirectURI);
+  }
+
+  listFixedClients(): Array<{ clientID: string; redirectURIs: string[] }> {
+    this.syncSettings();
+    return Array.from(this.clients.entries())
+      .filter(([, client]) => client.fixed === true)
+      .map(([clientID, client]) => ({clientID, redirectURIs: [...client.redirectURIs]}));
+  }
+
+  /** Operator-only removal; revoke the selected client's tokens and pending codes. */
+  removeFixedClient(clientID: string): boolean {
+    this.syncSettings();
+    const client = this.clients.get(clientID);
+    if (!client || client.fixed !== true) return false;
+    this.clients.delete(clientID);
+    for (const [key, value] of this.tokens) if (value.clientID === clientID) this.tokens.delete(key);
+    for (const [key, value] of this.refreshTokens) if (value.clientID === clientID) this.refreshTokens.delete(key);
+    for (const [key, value] of this.codes) if (value.clientID === clientID) this.codes.delete(key);
+    this.persistState();
+    return true;
   }
 
   configured(): boolean {

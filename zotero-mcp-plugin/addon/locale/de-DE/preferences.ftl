@@ -247,3 +247,9 @@ pref-oauth-password-hint = Das Passwort wird im lokalen Zotero-Passwortmanager g
 pref-oauth-custom-label = Eigenes Autorisierungspasswort festlegen
 pref-oauth-custom-save = Passwort speichern
 pref-oauth-custom-hint = Eigenes Passwort eingeben (mindestens 16 Zeichen empfohlen). Änderungen widerrufen alte Autorisierungen; dasselbe Passwort bleibt gültig.
+pref-oauth-fixed-title = Fest registrierte OAuth-Clients
+pref-oauth-import-hint = Fügen Sie eine vollständige /oauth/authorize-URL ein. Client-ID und Rückruf-URL werden dauerhaft gespeichert.
+pref-oauth-fixed-id = Client-ID (optional; leer = zufällig)
+pref-oauth-fixed-redirect = Rückruf-URL (redirect_uri)
+pref-oauth-fixed-save = Client speichern / wiederverwenden
+pref-oauth-fixed-remove = Entfernen

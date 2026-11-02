@@ -247,3 +247,9 @@ pref-oauth-password-hint = Le mot de passe est conservé dans le gestionnaire lo
 pref-oauth-custom-label = Définir votre propre mot de passe
 pref-oauth-custom-save = Enregistrer le mot de passe
 pref-oauth-custom-hint = Choisissez un mot de passe (16 caractères ou plus recommandés). Un changement révoque les anciennes autorisations; le même mot de passe les conserve.
+pref-oauth-fixed-title = Clients OAuth préenregistrés
+pref-oauth-import-hint = Collez une URL /oauth/authorize complète pour enregistrer client_id et redirect_uri.
+pref-oauth-fixed-id = ID client (facultatif ; vide = aléatoire)
+pref-oauth-fixed-redirect = URL de redirection (redirect_uri)
+pref-oauth-fixed-save = Enregistrer / réutiliser
+pref-oauth-fixed-remove = Supprimer
