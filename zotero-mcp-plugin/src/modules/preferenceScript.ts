@@ -1,6 +1,7 @@
 import { config } from "../../package.json";
 import { getString } from "../utils/locale";
 import { ClientConfigGenerator } from "./clientConfigGenerator";
+import { oauthServer, normalizeOAuthOrigin } from "./oauthServer";
 
 export async function registerPrefsScripts(_window: Window) {
   // This function is called when the prefs window is opened
@@ -76,6 +77,215 @@ function bindHtmlSelect(doc: Document, selector: string, prefKey: string) {
   if (val !== undefined && val !== null) el.value = String(val);
   el.addEventListener("change", () => {
     Zotero.Prefs.set(prefKey, el.value, true);
+  });
+}
+
+/** OAuth is opt-in; the password can be viewed/copied from local credential storage. */
+function bindOAuthPreferences(doc: Document) {
+  const prefix = "extensions.zotero.zotero-mcp-plugin.oauth";
+  const enabled = doc.querySelector("#zotero-mcp-oauth-enabled") as HTMLInputElement;
+  const serverUrl = doc.querySelector("#zotero-mcp-oauth-url") as HTMLInputElement;
+  const generate = doc.querySelector("#zotero-mcp-oauth-generate") as HTMLButtonElement;
+  const password = doc.querySelector("#zotero-mcp-oauth-password") as HTMLInputElement;
+  const customPassword = doc.querySelector("#zotero-mcp-oauth-custom-password") as HTMLInputElement;
+  const saveCustomPassword = doc.querySelector("#zotero-mcp-oauth-custom-save") as HTMLButtonElement;
+  const showPassword = doc.querySelector("#zotero-mcp-oauth-show") as HTMLButtonElement;
+  const hidePassword = doc.querySelector("#zotero-mcp-oauth-hide") as HTMLButtonElement;
+  const copyPassword = doc.querySelector("#zotero-mcp-oauth-copy") as HTMLButtonElement;
+  const settings = doc.querySelector("#zotero-mcp-oauth-settings") as HTMLElement;
+  const authorizationURL = doc.querySelector("#zotero-mcp-oauth-import-url") as HTMLTextAreaElement;
+  const fixedID = doc.querySelector("#zotero-mcp-oauth-fixed-id") as HTMLInputElement;
+  const fixedRedirect = doc.querySelector("#zotero-mcp-oauth-fixed-redirect") as HTMLInputElement;
+  const saveFixed = doc.querySelector("#zotero-mcp-oauth-fixed-save") as HTMLButtonElement;
+  const fixedStatus = doc.querySelector("#zotero-mcp-oauth-fixed-status") as HTMLElement;
+  const fixedList = doc.querySelector("#zotero-mcp-oauth-fixed-list") as HTMLElement;
+  if (!enabled || !serverUrl || !generate || !password ||
+      !customPassword || !saveCustomPassword ||
+      !showPassword || !hidePassword || !copyPassword || !settings) return;
+
+  if (!authorizationURL || !fixedID || !fixedRedirect || !saveFixed || !fixedStatus || !fixedList) return;
+  enabled.checked = oauthServer.isEnabled();
+  serverUrl.value = String(Zotero.Prefs.get(`${prefix}.serverUrl`, true) || "");
+  // Keep the URL/password controls visible while disabled, so OAuth can be configured before enabling.
+  settings.style.display = "";
+
+  const resetPasswordDisplay = () => {
+    password.type = "password";
+    password.value = "";
+    showPassword.style.display = "";
+    hidePassword.style.display = "none";
+    showPassword.disabled = !oauthServer.configured();
+    copyPassword.disabled = !oauthServer.configured();
+  };
+  const recoverPassword = async (): Promise<string | null> => {
+    try {
+      const stored = await oauthServer.getStoredPassword();
+      if (stored) return stored;
+      addon.data.prefs!.window.alert(
+        "The previous password was saved as a one-way hash and cannot be recovered. " +
+        "Generate a new password once; after that you can view and copy it without rotation."
+      );
+    } catch (error) {
+      addon.data.prefs!.window.alert(`Unable to access local password storage: ${error}`);
+    }
+    return null;
+  };
+  resetPasswordDisplay();
+
+  showPassword.addEventListener("click", async () => {
+    const stored = await recoverPassword();
+    if (!stored) return;
+    password.value = stored;
+    password.type = "text";
+    showPassword.style.display = "none";
+    hidePassword.style.display = "";
+  });
+
+  hidePassword.addEventListener("click", () => {
+    password.type = "password";
+    showPassword.style.display = "";
+    hidePassword.style.display = "none";
+  });
+
+  copyPassword.addEventListener("click", async () => {
+    const stored = await recoverPassword();
+    if (!stored) return;
+    if (!await ClientConfigGenerator.copyToClipboard(stored)) {
+      addon.data.prefs!.window.alert("Unable to copy automatically. Use Show password to copy manually.");
+    }
+  });
+
+  // Fixed clients are configured only from the Zotero preferences UI.
+  // Never auto-register a client from an incoming remote OAuth request.
+  const renderFixedClients = () => {
+    fixedList.textContent = "";
+    for (const client of oauthServer.listFixedClients()) {
+      const row = doc.createElementNS("http://www.w3.org/1999/xhtml", "div") as HTMLElement;
+      row.style.cssText = "display:flex;gap:8px;align-items:center;margin-top:6px";
+      const description = doc.createElementNS("http://www.w3.org/1999/xhtml", "span") as HTMLElement;
+      description.style.cssText = "flex:1;overflow-wrap:anywhere;font-size:12px";
+      description.textContent = `${client.clientID} — ${client.redirectURIs.join(", ")}`;
+      const remove = doc.createElementNS("http://www.w3.org/1999/xhtml", "button") as HTMLButtonElement;
+      remove.setAttribute("type", "button");
+      remove.setAttribute("class", "zmp-btn");
+      remove.setAttribute("data-l10n-id", "pref-oauth-fixed-remove");
+      remove.textContent = "Remove";
+      remove.addEventListener("click", () => {
+        if (!addon.data.prefs!.window.confirm(`Remove OAuth client ${client.clientID} and revoke its tokens?`)) return;
+        try {
+          oauthServer.removeFixedClient(client.clientID);
+          fixedStatus.textContent = "Client removed; its tokens have been revoked.";
+          renderFixedClients();
+        } catch (error) { fixedStatus.textContent = String(error); }
+      });
+      row.append(description, remove);
+      fixedList.appendChild(row);
+    }
+  };
+
+  const importAuthorizeURL = () => {
+    const input = authorizationURL.value.trim();
+    if (!input) return;
+    try {
+      const item = oauthServer.importAuthorizeURL(input);
+      fixedID.value = item.clientID;
+      fixedRedirect.value = new URL(input).searchParams.get("redirect_uri") || "";
+      authorizationURL.value = ""; // Never keep PKCE/state parameters in preferences.
+      fixedStatus.textContent = item.reused ? "Existing client reused." : "Fixed client saved.";
+      renderFixedClients();
+    } catch (error) {
+      fixedStatus.textContent = `Cannot import authorization URL: ${error}`;
+    }
+  };
+
+  // Pasting a complete URL immediately imports a persistent client binding.
+  authorizationURL.addEventListener("input", () => {
+    if (/^https:\/\/[^\s]+\/oauth\/authorize\?/.test(authorizationURL.value.trim())) {
+      importAuthorizeURL();
+    }
+  });
+  authorizationURL.addEventListener("change", importAuthorizeURL);
+  saveFixed.addEventListener("click", () => {
+    try {
+      const item = oauthServer.saveFixedClient(fixedID.value, fixedRedirect.value);
+      fixedID.value = item.clientID;
+      fixedStatus.textContent = item.reused ? "Existing client reused." : "Fixed client saved.";
+      renderFixedClients();
+    } catch (error) { fixedStatus.textContent = `Cannot save OAuth client: ${error}`; }
+  });
+  renderFixedClients();
+
+  serverUrl.addEventListener("change", () => {
+    const origin = normalizeOAuthOrigin(serverUrl.value.trim());
+    if (!origin) {
+      addon.data.prefs!.window.alert("OAuth public origin must be HTTPS, e.g. https://zotero.example.com (without /mcp).");
+      serverUrl.value = String(Zotero.Prefs.get(`${prefix}.serverUrl`, true) || "");
+      return;
+    }
+    serverUrl.value = origin;
+    Zotero.Prefs.set(`${prefix}.serverUrl`, origin, true);
+  });
+
+  // Editing does not affect a working authorization until Save is clicked.
+  saveCustomPassword.addEventListener("click", async () => {
+    const chosen = customPassword.value;
+    if (!chosen) {
+      addon.data.prefs!.window.alert("Enter a custom OAuth authorization password first.");
+      return;
+    }
+    saveCustomPassword.disabled = true;
+    try {
+      await oauthServer.setPassword(chosen);
+      password.value = chosen;
+      password.type = "text";
+      customPassword.value = "";
+      showPassword.style.display = "none";
+      hidePassword.style.display = "";
+      showPassword.disabled = false;
+      copyPassword.disabled = false;
+    } catch (error) {
+      addon.data.prefs!.window.alert(`Cannot save custom OAuth password: ${error}`);
+    } finally {
+      saveCustomPassword.disabled = false;
+    }
+  });
+
+  generate.addEventListener("click", async () => {
+    generate.disabled = true;
+    try {
+      password.value = await oauthServer.generatePassword();
+      password.type = "text";
+      showPassword.style.display = "none";
+      hidePassword.style.display = "";
+      showPassword.disabled = false;
+      copyPassword.disabled = false;
+    } catch (error) {
+      addon.data.prefs!.window.alert(`Cannot generate OAuth password: ${error}`);
+    } finally {
+      generate.disabled = false;
+    }
+  });
+
+  enabled.addEventListener("change", () => {
+    if (enabled.checked && !oauthServer.configured()) {
+      enabled.checked = false;
+      addon.data.prefs!.window.alert("Configure the HTTPS public origin and set or generate an authorization password first.");
+      return;
+    }
+    Zotero.Prefs.set(`${prefix}.enabled`, enabled.checked, true);
+    // Listener layout changed: restart both sockets without changing OAuth flows.
+    const server = addon.data.httpServer;
+    if (server?.isServerRunning()) {
+      try {
+        const port = Number(Zotero.Prefs.get(
+          "extensions.zotero.zotero-mcp-plugin.mcp.server.port", true,
+        )) || 23120;
+        server.stop();
+        server.start(port);
+      } catch (error) {
+        addon.data.prefs!.window.alert(`Failed to restart MCP listener ports: ${error}`);
+      }
+    }
   });
 }
 
@@ -159,6 +369,7 @@ function bindPrefEvents() {
 
   // Bind HTML toggle switches (these need manual pref sync since they're not XUL checkboxes)
   bindHtmlCheckbox(doc, `#zotero-prefpane-${config.addonRef}-mcp-server-allow-remote`, "extensions.zotero.zotero-mcp-plugin.mcp.server.allowRemote");
+  bindOAuthPreferences(doc);
   bindHtmlCheckbox(doc, `#zotero-prefpane-${config.addonRef}-include-metadata`, "extensions.zotero.zotero-mcp-plugin.ui.includeMetadata");
   bindHtmlCheckbox(doc, `#zotero-prefpane-${config.addonRef}-semantic-auto-update`, "extensions.zotero.zotero-mcp-plugin.semantic.autoUpdate");
   bindHtmlCheckbox(doc, `#zotero-prefpane-${config.addonRef}-custom-include-webpage`, "extensions.zotero.zotero-mcp-plugin.custom.includeWebpage");
@@ -306,7 +517,9 @@ function updateServerDependentUI(doc: Document, enabled: boolean) {
   const serverOffHint = doc?.querySelector('#server-off-hint') as HTMLElement;
   const portRow = doc?.querySelector('#server-port-row') as HTMLElement;
   const remoteRow = doc?.querySelector('#server-remote-row') as HTMLElement;
+  const oauthRow = doc?.querySelector('#server-oauth-row') as HTMLElement;
 
+  if (oauthRow) oauthRow.style.display = enabled ? '' : 'none';
   if (serverContent) serverContent.style.display = enabled ? '' : 'none';
   if (serverOffHint) serverOffHint.style.display = enabled ? 'none' : 'block';
   if (portRow) portRow.style.display = enabled ? '' : 'none';
