@@ -3,6 +3,17 @@
     "zotero-mcp-plugin@autoagent.my": {
       "updates": [
         {
+          "version": "1.7.0-plus-beta.1",
+          "update_link": "https://github.com/cloneorcopy/zotero-mcp-plus/releases/download/v1.7.0-plus-beta.1/zotero-mcp-plugin-1.7.0-plus-beta.1.xpi",
+          "update_hash": "sha256:375ea6596bd165fa262fb9a2ae254371950a97f7ee77a5c97f8e6d69ea3c24ad",
+          "applications": {
+            "zotero": {
+              "strict_min_version": "6.999",
+              "strict_max_version": "10.99.99"
+            }
+          }
+        },
+        {
           "version": "1.7.0-plus-beta.0",
           "update_link": "https://github.com/cloneorcopy/zotero-mcp-plus/releases/download/v1.7.0-plus-beta.0/zotero-mcp-plugin-1.7.0-plus-beta.0.xpi",
           "update_hash": "sha256:0ad89729ec0da0c7b623b6c8074f21399e9d8cd49b09ea84a04e2ab46b6775e9",
