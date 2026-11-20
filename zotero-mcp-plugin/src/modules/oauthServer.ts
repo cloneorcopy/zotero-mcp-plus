@@ -1,20 +1,28 @@
 /**
  * Optional, self-hosted OAuth authorization-code + PKCE for the embedded MCP server.
  * Mirrors coding-tools-mcp's standalone OAuth endpoints, without a reverse proxy.
- * Client registrations, access tokens, and rotating refresh tokens survive Zotero restarts.
- * Short-lived, single-use authorization codes remain process-local.
+ * Access and rotating refresh tokens, together with the client registrations that
+ * hold them, survive Zotero restarts. Unused registrations and short-lived,
+ * single-use authorization codes stay process-local.
  */
 
 const PREFIX = "extensions.zotero.zotero-mcp-plugin.oauth";
 const CODE_TTL = 300_000;
 const TOKEN_TTL = 86_400_000;
 const REFRESH_TTL = 30 * 86_400_000;
-const STORAGE_VERSION = 1;
+// Bumped with the persistence change: state written by older builds (which kept
+// every registration in the pref) is ignored and replaced instead of restored.
+const STORAGE_VERSION = 2;
 const MAX_CLIENTS = 128;
+const MAX_PERSISTED_CLIENTS = 32;
 const MAX_CODES = 256;
-const MAX_TOKENS = 512;
-const MAX_REFRESH_TOKENS = 512;
+const MAX_TOKENS = 64;
+const MAX_REFRESH_TOKENS = 64;
 const MAX_BODY_BYTES = 8192;
+// Client metadata is attacker-supplied: keep it small enough that the pref
+// holding the persisted state stays far below Gecko's per-string pref limit.
+const MAX_REDIRECT_URIS = 3;
+const MAX_REDIRECT_URI_LENGTH = 512;
 
 type HttpResult = {
   status: number;
@@ -105,6 +113,8 @@ function response(status: number, data: unknown, extra: Record<string, string> =
 function html(status: number, body: string): HttpResult {
   const result = response(status, "");
   result.headers["Content-Type"] = "text/html; charset=utf-8";
+  // The consent page must never be framed by another origin.
+  result.headers["X-Frame-Options"] = "DENY";
   result.body = body;
   return result;
 }
@@ -122,10 +132,11 @@ export function normalizeOAuthOrigin(input: string): string | null {
 }
 
 function validRedirects(redirects: unknown): redirects is string[] {
-  if (!Array.isArray(redirects) || redirects.length < 1 || redirects.length > 10) return false;
+  if (!Array.isArray(redirects) || redirects.length < 1 ||
+      redirects.length > MAX_REDIRECT_URIS) return false;
   const seen = new Set<string>();
   for (const uri of redirects) {
-    if (typeof uri !== "string" || uri.length > 2048 || seen.has(uri)) return false;
+    if (typeof uri !== "string" || uri.length > MAX_REDIRECT_URI_LENGTH || seen.has(uri)) return false;
     try {
       const u = new URL(uri);
       const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(u.hostname.toLowerCase());
@@ -165,16 +176,23 @@ export class MCPAuthServer {
     return login?.password || null;
   }
 
-  private writePasswordToVault(value: string): void {
+  /** Zotero 8 (Firefox 140 ESR) exposes only the asynchronous Login Manager API. */
+  private async writePasswordToVault(value: string): Promise<void> {
     if (this.vault) { this.vault.write(value); return; }
-    const manager = Cc["@mozilla.org/login-manager;1"].getService(Ci.nsILoginManager);
-    const logins = manager.findLogins(PASSWORD_ORIGIN, null as any, PASSWORD_REALM);
+    const manager = Cc["@mozilla.org/login-manager;1"].getService(Ci.nsILoginManager) as any;
+    const logins = manager.findLogins(PASSWORD_ORIGIN, null, PASSWORD_REALM);
     const existing = (Array.from(logins as unknown as Array<{username: string}>)
       .find(item => item.username === PASSWORD_USERNAME)) as nsILoginInfo | undefined;
     const info = Cc["@mozilla.org/login-manager/loginInfo;1"].createInstance(Ci.nsILoginInfo);
     info.init(PASSWORD_ORIGIN, null as any, PASSWORD_REALM, PASSWORD_USERNAME, value, "", "");
-    if (existing) manager.modifyLogin(existing, info);
-    else (manager as any).addLogin(info);
+    if (existing) {
+      manager.modifyLogin(existing, info);
+    } else if (typeof manager.addLoginAsync === "function") {
+      await manager.addLoginAsync(info);
+    } else {
+      // Zotero 7 / older Gecko only ships the synchronous call.
+      manager.addLogin(info);
+    }
   }
 
   /** Returns the existing password only after validating it against the saved digest. */
@@ -204,6 +222,17 @@ export class MCPAuthServer {
 
   isEnabled(): boolean { return this.pref("enabled") === true; }
 
+  private clientHasLiveToken(clientID: string): boolean {
+    const now = Date.now();
+    for (const token of this.tokens.values()) {
+      if (token.clientID === clientID && token.expires > now) return true;
+    }
+    for (const token of this.refreshTokens.values()) {
+      if (token.clientID === clientID && token.expires > now) return true;
+    }
+    return false;
+  }
+
   private origin(): string | null {
     const raw = this.pref("serverUrl");
     return typeof raw === "string" ? normalizeOAuthOrigin(raw) : null;
@@ -222,12 +251,27 @@ export class MCPAuthServer {
   }
 
   private persistState(): void {
+    // Persist only clients that actually hold a live token. An unauthenticated
+    // registration flood therefore cannot grow the pref, cannot displace an
+    // authorized connector, and cannot survive a restart.
+    const now = Date.now();
+    const live = new Set<string>();
+    for (const token of this.tokens.values()) if (token.expires > now) live.add(token.clientID);
+    for (const token of this.refreshTokens.values()) if (token.expires > now) live.add(token.clientID);
+    const clients = Array.from(this.clients.entries())
+      .filter(([clientID]) => live.has(clientID))
+      .slice(-MAX_PERSISTED_CLIENTS);
+    const kept = new Set(clients.map(([clientID]) => clientID));
+    const durable = (source: Map<string, AccessToken>, limit: number) =>
+      Array.from(source.entries())
+        .filter(([, token]) => token.expires > now && kept.has(token.clientID))
+        .slice(-limit);
     this.setPref("persistentState", JSON.stringify({
       version: STORAGE_VERSION,
       config: this.currentSettings,
-      clients: Array.from(this.clients.entries()),
-      tokens: Array.from(this.tokens.entries()),
-      refreshTokens: Array.from(this.refreshTokens.entries()),
+      clients,
+      tokens: durable(this.tokens, MAX_TOKENS),
+      refreshTokens: durable(this.refreshTokens, MAX_REFRESH_TOKENS),
     }));
   }
 
@@ -248,7 +292,7 @@ export class MCPAuthServer {
           if (saved?.version === STORAGE_VERSION && saved.config === id &&
               Array.isArray(saved.clients) && Array.isArray(saved.tokens) &&
               Array.isArray(saved.refreshTokens)) {
-            for (const entry of saved.clients.slice(0, MAX_CLIENTS)) {
+            for (const entry of saved.clients.slice(0, MAX_PERSISTED_CLIENTS)) {
               if (!Array.isArray(entry) || entry.length !== 2) continue;
               const [clientID, client] = entry;
               if (typeof clientID !== "string" || !/^[0-9a-f]{48}$/.test(clientID) ||
@@ -288,7 +332,7 @@ export class MCPAuthServer {
     const salt = randomSecret(16);
     const digest = await sha256(`${salt}:${password}`);
     // Save the recoverable secret first; storage failure must not rotate credentials.
-    this.writePasswordToVault(password);
+    await this.writePasswordToVault(password);
     this.setPref("passwordSalt", salt);
     this.setPref("passwordHash", digest);
     this.syncSettings();
@@ -363,11 +407,17 @@ export class MCPAuthServer {
   private loginPage(form: URLSearchParams, error = ""): HttpResult {
     const fields = ["client_id", "redirect_uri", "code_challenge", "state", "resource"]
       .map((name) => `<input type="hidden" name="${name}" value="${escapeHtml(form.get(name) || "")}">`).join("");
+    const redirect = form.get("redirect_uri") || "";
+    let redirectHost = redirect;
+    // Show the punycode host prominently: it is what the browser will contact,
+    // so homoglyph look-alikes of the real callback stand out.
+    try { redirectHost = new URL(redirect).host; } catch { /* Show the raw value when it cannot be parsed. */ }
     return html(error ? 401 : 200,
       `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Authorize Zotero MCP</title>` +
-      `<style>body{font:16px system-ui,sans-serif;max-width:460px;margin:8vh auto;padding:20px}input,button{box-sizing:border-box;width:100%;padding:12px;margin:10px 0}button{background:#1768cc;color:white;border:0;border-radius:5px}</style></head><body>` +
+      `<style>body{font:16px system-ui,sans-serif;max-width:460px;margin:8vh auto;padding:20px}input,button{box-sizing:border-box;width:100%;padding:12px;margin:10px 0}button{background:#1768cc;color:white;border:0;border-radius:5px}.host{font-weight:700;word-break:break-all}.raw{font-size:12px;color:#555;word-break:break-all}</style></head><body>` +
       `<h2>Authorize Zotero MCP</h2><p>Client: ${escapeHtml(form.get("client_id") || "")}</p>` +
-      `<p>Redirect: ${escapeHtml(form.get("redirect_uri") || "")}</p>` +
+      `<p>This authorization returns a code to:<br><span class="host">${escapeHtml(redirectHost)}</span></p>` +
+      `<p class="raw">Full redirect: ${escapeHtml(redirect)}</p>` +
       (error ? `<p role="alert">${escapeHtml(error)}</p>` : "") +
       `<form method="POST" action="/oauth/authorize">${fields}<label>Authorization password<input type="password" name="password" required autocomplete="current-password"></label>` +
       `<button type="submit">Authorize</button></form></body></html>`);
@@ -435,7 +485,14 @@ export class MCPAuthServer {
         (metadata.response_types !== undefined && (!Array.isArray(metadata.response_types) || !metadata.response_types.includes("code")))) {
         return response(400, { error: "invalid_client_metadata" });
       }
-      if (this.clients.size >= MAX_CLIENTS) return response(400, { error: "registration_limit" });
+      if (this.clients.size >= MAX_CLIENTS) {
+        // Never let an unauthenticated registration flood lock out real
+        // connectors: drop the oldest registration that holds no live token.
+        const stale = Array.from(this.clients.keys())
+          .find((clientID) => !this.clientHasLiveToken(clientID));
+        if (stale === undefined) return response(400, { error: "registration_limit" });
+        this.clients.delete(stale);
+      }
       const id = randomSecret(24);
       const secret = authMethod === "none" ? undefined : randomSecret(32);
       this.clients.set(id, { redirectURIs: metadata.redirect_uris,

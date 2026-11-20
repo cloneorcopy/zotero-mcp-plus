@@ -1,6 +1,5 @@
-import { MCPAuthServer, normalizeOAuthOrigin } from "../src/modules/oauthServer";
-
-declare const expect: Chai.ExpectStatic;
+import { MCPAuthServer, normalizeOAuthOrigin } from "../src/modules/oauthServer.ts";
+import { expect } from "chai";
 
 const BASE = "https://zotero.example.com";
 const CALLBACK = "https://chatgpt.com/connector_platform_oauth_redirect";
@@ -103,6 +102,11 @@ describe("Zotero MCP OAuth (opt-in)", function () {
     const rawState = String(store.get(`${PREFIX}persistentState`));
     expect(rawState).not.to.contain(access);
     expect(rawState).not.to.contain(issued.refresh_token);
+    const persistedState = JSON.parse(String(store.get(`${PREFIX}persistentState`)));
+    // Only the registration that holds a live token is durable.
+    expect(persistedState.clients.length).to.equal(1);
+    expect(persistedState.tokens.length).to.equal(1);
+    expect(persistedState.refreshTokens.length).to.equal(1);
     const prefs = { get: (key: string) => store.get(key), set: (key: string, value: unknown) => { store.set(key, value); } };
     const restarted = new MCPAuthServer(prefs);
     expect(await restarted.isAuthorized(`Authorization: Bearer ${access}\r\n`)).to.equal(true);
@@ -122,5 +126,88 @@ describe("Zotero MCP OAuth (opt-in)", function () {
 
     await server.generatePassword();
     expect(await server.isAuthorized(`Authorization: Bearer ${access}\r\n`)).to.equal(false);
+  });
+
+  it("bounds registration metadata and never persists unauthenticated clients", async function () {
+    store.set(`${PREFIX}serverUrl`, BASE);
+    await server.generatePassword();
+    store.set(`${PREFIX}enabled`, true);
+
+    const tooMany = await server.handleRequest("POST", "/oauth/register", new URLSearchParams(),
+      JSON.stringify({ redirect_uris: [1, 2, 3, 4].map((n) => `https://chatgpt.com/cb-${n}`) }), HEADERS_JSON);
+    expect(tooMany?.status).to.equal(400);
+    const tooLong = await server.handleRequest("POST", "/oauth/register", new URLSearchParams(),
+      JSON.stringify({ redirect_uris: [`https://chatgpt.com/${"a".repeat(512)}`] }), HEADERS_JSON);
+    expect(tooLong?.status).to.equal(400);
+
+    for (let i = 0; i < 128; i++) {
+      const registered = await server.handleRequest("POST", "/oauth/register", new URLSearchParams(),
+        JSON.stringify({ redirect_uris: [CALLBACK] }), HEADERS_JSON);
+      expect(registered?.status).to.equal(201);
+    }
+    // The cap evicts the oldest registration that holds no token instead of
+    // refusing every new connector forever.
+    const afterCap = await server.handleRequest("POST", "/oauth/register", new URLSearchParams(),
+      JSON.stringify({ redirect_uris: [CALLBACK] }), HEADERS_JSON);
+    expect(afterCap?.status).to.equal(201);
+
+    const persisted = JSON.parse(String(store.get(`${PREFIX}persistentState`)));
+    expect(persisted.clients).to.deep.equal([]);
+    expect(persisted.tokens).to.deep.equal([]);
+  });
+
+  it("writes the password through the Zotero 8 async Login Manager", async function () {
+    const calls: string[] = [];
+    const info: any = { init: (...args: any[]) => { info.password = args[4]; } };
+    const manager = {
+      findLogins: () => [],
+      addLoginAsync: async () => { calls.push("addLoginAsync"); },
+      addLogin: () => { calls.push("addLogin"); },
+    };
+    const scope = globalThis as any;
+    const previous = { Cc: scope.Cc, Ci: scope.Ci };
+    scope.Cc = {
+      "@mozilla.org/login-manager;1": { getService: () => manager },
+      "@mozilla.org/login-manager/loginInfo;1": { createInstance: () => info },
+    };
+    scope.Ci = { nsILoginManager: {}, nsILoginInfo: {} };
+    try {
+      const local = new MCPAuthServer({
+        get: (key: string) => store.get(key),
+        set: (key: string, value: unknown) => { store.set(key, value); },
+      });
+      const password = await local.generatePassword();
+      expect(calls).to.deep.equal(["addLoginAsync"]);
+      expect(info.password).to.equal(password);
+    } finally {
+      if (previous.Cc === undefined) delete scope.Cc; else scope.Cc = previous.Cc;
+      if (previous.Ci === undefined) delete scope.Ci; else scope.Ci = previous.Ci;
+    }
+  });
+
+  it("falls back to the synchronous Login Manager on Zotero 7", async function () {
+    const calls: string[] = [];
+    const manager = {
+      findLogins: () => [],
+      addLogin: () => { calls.push("addLogin"); },
+    };
+    const scope = globalThis as any;
+    const previous = { Cc: scope.Cc, Ci: scope.Ci };
+    scope.Cc = {
+      "@mozilla.org/login-manager;1": { getService: () => manager },
+      "@mozilla.org/login-manager/loginInfo;1": { createInstance: () => ({ init: () => undefined }) },
+    };
+    scope.Ci = { nsILoginManager: {}, nsILoginInfo: {} };
+    try {
+      const local = new MCPAuthServer({
+        get: (key: string) => store.get(key),
+        set: (key: string, value: unknown) => { store.set(key, value); },
+      });
+      await local.generatePassword();
+      expect(calls).to.deep.equal(["addLogin"]);
+    } finally {
+      if (previous.Cc === undefined) delete scope.Cc; else scope.Cc = previous.Cc;
+      if (previous.Ci === undefined) delete scope.Ci; else scope.Ci = previous.Ci;
+    }
   });
 });
