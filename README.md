@@ -92,6 +92,14 @@ The plugin uses Streamable HTTP, which enables real-time bidirectional communica
 
 For detailed client-specific configuration instructions, see the [Chinese README](./README-zh.md).
 
+#### Optional: Remote Clients over OAuth (ChatGPT Web)
+
+The plugin can serve remote MCP clients behind an HTTPS tunnel (for example a ChatGPT custom remote MCP connector) with an optional, self-hosted OAuth 2.0 authorization-code + PKCE flow. It is off by default.
+
+Authentication is decided **per entry point**: the configured MCP port (default `23120`) stays unauthenticated for local clients and only follows **Allow remote access**, while the authenticated listener runs on `MCP port + 1` (default `23121`, loopback only) and requires a Bearer token. Point the tunnel at `MCP port + 1`, never at the plain MCP port.
+
+Setup steps, the full listener matrix, endpoint list, state limits and smoke tests are documented in [zotero-mcp-plugin/OAUTH.md](./zotero-mcp-plugin/OAUTH.md).
+
 ---
 
 ## 👨‍💻 Developer Guide
