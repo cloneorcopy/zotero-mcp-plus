@@ -219,3 +219,22 @@ pref-contact-title = Información de contacto
 pref-contact-email = Correo electrónico: fransjone@mail.com
 pref-contact-github = GitHub: https://github.com/cookjohn/zotero-mcp
 pref-contact-wechat = WeChat: 未来论文实验室
+
+pref-oauth-enable-text = Activar autorización OAuth
+pref-oauth-enable-sub = Authorization Code + PKCE para clientes MCP remotos (desactivado por defecto)
+pref-oauth-url-label = Origen HTTPS público
+pref-oauth-url-hint = Nombre de host de Cloudflare Tunnel sin /mcp; el origen del túnel apunta al puerto seguro (puerto MCP + 1, predeterminado 23121). El puerto MCP normal sigue sin autorización para clientes locales.
+pref-oauth-generate = Generar o cambiar la contraseña de autorización
+pref-oauth-show = Mostrar contraseña
+pref-oauth-hide = Ocultar contraseña
+pref-oauth-copy = Copiar contraseña
+pref-oauth-password-hint = La contraseña se guarda en el gestor local de contraseñas de Zotero y puede verse o copiarse. Cambiarla revoca las autorizaciones anteriores.
+pref-oauth-custom-label = Establecer contraseña de autorización propia
+pref-oauth-custom-save = Guardar contraseña
+pref-oauth-custom-hint = Introduce una contraseña (se recomiendan 16 caracteres o más). Los cambios revocan autorizaciones anteriores; guardar la misma no las revoca.
+pref-oauth-fixed-title = Clientes OAuth predefinidos
+pref-oauth-import-hint = Pegue una URL completa de /oauth/authorize para importar el client_id y el redirect_uri.
+pref-oauth-fixed-id = ID de cliente (opcional; vacío = aleatorio)
+pref-oauth-fixed-redirect = URL de redirección (redirect_uri)
+pref-oauth-fixed-save = Guardar / reutilizar cliente
+pref-oauth-fixed-remove = Quitar
