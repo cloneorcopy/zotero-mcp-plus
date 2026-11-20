@@ -1,4 +1,4 @@
-import { MCPAuthServer, normalizeOAuthOrigin } from "../src/modules/oauthServer.ts";
+import { MCPAuthServer, normalizeOAuthOrigin, arrivesThroughProxy } from "../src/modules/oauthServer.ts";
 import { expect } from "chai";
 
 const BASE = "https://zotero.example.com";
@@ -98,7 +98,7 @@ describe("Zotero MCP OAuth (opt-in)", function () {
     expect(token?.status).to.equal(200);
     const issued = JSON.parse(token!.body);
     const access = issued.access_token;
-    expect(await server.isAuthorized(`Authorization: Bearer ${access}\r\n`)).to.equal(true);
+    expect(await server.isAuthorized(`Authorization: Bearer ${access}`)).to.equal(true);
     const rawState = String(store.get(`${PREFIX}persistentState`));
     expect(rawState).not.to.contain(access);
     expect(rawState).not.to.contain(issued.refresh_token);
@@ -109,7 +109,7 @@ describe("Zotero MCP OAuth (opt-in)", function () {
     expect(persistedState.refreshTokens.length).to.equal(1);
     const prefs = { get: (key: string) => store.get(key), set: (key: string, value: unknown) => { store.set(key, value); } };
     const restarted = new MCPAuthServer(prefs);
-    expect(await restarted.isAuthorized(`Authorization: Bearer ${access}\r\n`)).to.equal(true);
+    expect(await restarted.isAuthorized(`Authorization: Bearer ${access}`)).to.equal(true);
     const refreshFields = new URLSearchParams({
       grant_type: "refresh_token", client_id: id,
       refresh_token: issued.refresh_token, resource: `${BASE}/mcp`,
@@ -118,14 +118,14 @@ describe("Zotero MCP OAuth (opt-in)", function () {
     expect(renewedResponse?.status).to.equal(200);
     const renewed = JSON.parse(renewedResponse!.body);
     expect(renewed.refresh_token).not.to.equal(issued.refresh_token);
-    expect(await new MCPAuthServer(prefs).isAuthorized(`Authorization: Bearer ${renewed.access_token}\r\n`)).to.equal(true);
+    expect(await new MCPAuthServer(prefs).isAuthorized(`Authorization: Bearer ${renewed.access_token}`)).to.equal(true);
     const replayRefresh = await restarted.handleRequest("POST", "/oauth/token", new URLSearchParams(), refreshFields.toString(), HEADERS_FORM);
     expect(replayRefresh?.status).to.equal(400);
     const replay = await server.handleRequest("POST", "/oauth/token", new URLSearchParams(), exchange.toString(), HEADERS_FORM);
     expect(replay?.status).to.equal(400);
 
     await server.generatePassword();
-    expect(await server.isAuthorized(`Authorization: Bearer ${access}\r\n`)).to.equal(false);
+    expect(await server.isAuthorized(`Authorization: Bearer ${access}`)).to.equal(false);
   });
 
   it("bounds registration metadata and never persists unauthenticated clients", async function () {
