@@ -148,6 +148,19 @@ function validRedirects(redirects: unknown): redirects is string[] {
   return true;
 }
 
+/**
+ * Headers that only appear when a CDN or tunnel proxied the request. A direct
+ * loopback/LAN client never sends them by accident, and forging one can at worst
+ * deny that single request, so they are safe for a fail-closed misdirection check.
+ */
+const PROXY_HEADERS = ["cf-ray", "cf-connecting-ip", "cdn-loop", "x-forwarded-for", "forwarded"];
+
+/** True when the request reached us through a proxy hop (CDN, tunnel, reverse proxy). */
+export function arrivesThroughProxy(headerText: string): boolean {
+  const headerBlock = headerText.split("\r\n\r\n", 1)[0];
+  return PROXY_HEADERS.some((name) => new RegExp(`^${name}:`, "im").test(headerBlock));
+}
+
 function header(text: string, name: string): string {
   // Never use untrusted forwarded headers for the OAuth issuer or resource.
   const headerBlock = text.split("\r\n\r\n", 1)[0];

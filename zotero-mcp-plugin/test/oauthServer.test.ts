@@ -210,4 +210,13 @@ describe("Zotero MCP OAuth (opt-in)", function () {
       if (previous.Ci === undefined) delete scope.Ci; else scope.Ci = previous.Ci;
     }
   });
+  it("recognizes requests that only a tunnel or CDN could have forwarded", function () {
+    const direct = "GET /mcp HTTP/1.1\r\nHost: 192.168.1.10:23120\r\nAccept: application/json\r\n\r\n";
+    expect(arrivesThroughProxy(direct)).to.equal(false);
+    for (const name of ["cf-ray", "cf-connecting-ip", "cdn-loop", "x-forwarded-for", "forwarded"]) {
+      expect(arrivesThroughProxy(`GET /mcp HTTP/1.1\r\n${name}: value\r\n\r\n`)).to.equal(true);
+    }
+    // Header names in the body must not trigger the check.
+    expect(arrivesThroughProxy("POST /mcp HTTP/1.1\r\nContent-Type: application/json\r\n\r\n{\"cf-ray\":\"x\"}")).to.equal(false);
+  });
 });

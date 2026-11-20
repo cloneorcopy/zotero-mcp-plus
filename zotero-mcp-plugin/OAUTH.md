@@ -17,15 +17,19 @@ Authentication follows the **socket that accepted the request**. Host, peer IP,
 | off | off | loopback only, no auth | closed |
 | off | on | loopback only, no auth | closed |
 | on | off | all interfaces, no auth | closed |
-| on | on | all interfaces, no auth | loopback only, Bearer token required |
+| on | on | all interfaces, no auth (proxied requests refused with `403`) | loopback only, Bearer token required |
 
-> **This is deliberately different from the original proposal, which forced the
-> MCP port back to loopback whenever OAuth was enabled.** Here OAuth is a
+> **This is deliberately different from the policy discussed in the original
+> upstream review, which forced the MCP port back to loopback whenever OAuth was
+> enabled. It is not an agreed upstream decision.** Here OAuth is a
 > per-entry-point policy: the local MCP port stays unauthenticated and the
 > authenticated endpoint is a separate listener on `MCP port + 1`. The tunnel
-> must therefore point at **`MCP port + 1`**. A tunnel pointed at the plain MCP
-> port keeps reaching an unauthenticated endpoint — the plugin does not block
-> that, and that is the trade-off of this entry-point design.
+> must therefore point at **`MCP port + 1`**. A tunnel still pointed at the plain
+> MCP port is refused with `403 tunnel_on_unauthenticated_port` while OAuth is
+> enabled (detected from `cf-ray`, `cf-connecting-ip`, `cdn-loop`,
+> `X-Forwarded-For` or `Forwarded`), so a misconfigured tunnel fails closed
+> instead of silently serving unauthenticated requests. Direct LAN clients on the
+> MCP port are unaffected.
 
 ## Configure Zotero
 
@@ -93,6 +97,11 @@ curl -i "$BASE/.well-known/oauth-authorization-server"
 curl -i -X POST "$BASE/mcp" -H 'Content-Type: application/json' \
   --data '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 # Without a valid OAuth access token the last call MUST return HTTP 401.
+
+# While OAuth is enabled, a tunnel that still points at the plain MCP port is
+# refused instead of serving unauthenticated requests:
+curl -i -H 'cf-ray: smoke-test' "http://127.0.0.1:23120/mcp"
+# → HTTP 403 {"error":"tunnel_on_unauthenticated_port"}
 ```
 
 Never publish the authorization password, an access token or a refresh token in

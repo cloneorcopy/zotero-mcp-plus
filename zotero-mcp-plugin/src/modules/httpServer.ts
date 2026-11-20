@@ -7,7 +7,7 @@ import {
   getByteLength,
   type ByteReader,
 } from "./httpRequestReader";
-import { oauthServer } from "./oauthServer";
+import { oauthServer, arrivesThroughProxy } from "./oauthServer";
 
 declare let ztoolkit: ZToolkit;
 
@@ -451,6 +451,24 @@ export class HttpServer {
           // The body was already framed at exactly Content-Length bytes and
           // UTF-8 decoded once, on a complete buffer.
           const requestBody = method === "POST" ? read.body : "";
+
+          // Fail closed when a tunnel still points at this port: the OAuth gate
+          // lives on port + 1, so a proxied request here would silently bypass
+          // it. Direct LAN clients are unaffected.
+          if (!requiresOAuth && oauthServer.isEnabled() && arrivesThroughProxy(headerText)) {
+            const hintBody = JSON.stringify({
+              error: "tunnel_on_unauthenticated_port",
+              error_description: `Point the tunnel at port ${this.port + 1} (the OAuth-protected listener), not at port ${this.port}.`,
+            });
+            const hintHeaders = this.buildHttpHeaders({
+              status: 403, statusText: "Forbidden",
+              headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" },
+            }, false) + `Content-Length: ${getByteLength(hintBody)}\r\n\r\n`;
+            ztoolkit.log(`[HttpServer] Refused a proxied request on the unauthenticated port ${this.port}`, "warn");
+            output.write(hintHeaders, hintHeaders.length);
+            writeStringToStream(output, hintBody);
+            return;
+          }
 
           // Authenticate before allocating MCP sessions or dispatching tools.
           // Only the OAuth discovery, registration, login, and token endpoints
