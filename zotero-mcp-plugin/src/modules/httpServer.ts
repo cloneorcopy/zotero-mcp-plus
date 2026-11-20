@@ -42,6 +42,10 @@ export class HttpServer {
     return this.isRunning;
   }
 
+  public isOAuthListenerRunning(): boolean {
+    return Boolean(this.oauthSocket);
+  }
+
   public start(port: number) {
     // 进程诊断
     try {
@@ -57,8 +61,10 @@ export class HttpServer {
     }
 
     if (!port || isNaN(port) || port < 1 || port > 65535 ||
-        (oauthServer.isEnabled() && port === 65535)) {
-      const errorMsg = `[HttpServer] Invalid port number: ${port}. Port must be between 1 and 65535.`;
+        (oauthServer.isEnabled() && port >= 65535)) {
+      const errorMsg = oauthServer.isEnabled()
+        ? `[HttpServer] Invalid port number: ${port}. With OAuth enabled the port must be between 1 and 65534 so port + 1 (the authenticated listener) stays valid.`
+        : `[HttpServer] Invalid port number: ${port}. Port must be between 1 and 65535.`;
       ztoolkit.log(errorMsg, 'error');
       throw new Error(errorMsg);
     }
@@ -74,29 +80,45 @@ export class HttpServer {
       // init方法参数：端口，是否仅允许回环地址，backlog队列大小
       // loopbackOnly=true: 仅监听 127.0.0.1
       // loopbackOnly=false: 监听 0.0.0.0 (所有接口)
-      // The unauthenticated listener must be loopback-only when OAuth is enabled.
-      const loopbackOnly = oauthServer.isEnabled() || !serverPreferences.isRemoteAccessAllowed();
+      // Per-entry authentication: the configured MCP port serves local clients
+      // without a token and follows only "Allow remote access"; the dedicated
+      // port + 1 listener enforces OAuth and exists only while remote access and
+      // OAuth are both on. Nothing here is decided from Host, peer IP, or
+      // X-Forwarded-* headers.
+      const remoteAccess = serverPreferences.isRemoteAccessAllowed();
+      const loopbackOnly = !remoteAccess;
+      const oauthListenerEnabled = oauthServer.isEnabled() && remoteAccess;
       Zotero.debug(`[HttpServer] Binding to ${loopbackOnly ? '127.0.0.1' : '0.0.0.0'}:${port}`);
       this.serverSocket.init(port, loopbackOnly, -1);
       this.serverSocket.asyncListen(this.listener);
       this.isRunning = true;
 
       // Separate AUTHENTICATED loopback listener for Cloudflare Tunnel.
-      // Its security is determined by the socket that accepted the request,
-      // never by peer IP, Host, Origin, or X-Forwarded-* headers.
-      if (oauthServer.isEnabled()) {
-        this.oauthSocket = Cc[
-          "@mozilla.org/network/server-socket;1"
-        ].createInstance(Ci.nsIServerSocket);
-        this.oauthSocket.init(port + 1, true, -1);
-        this.oauthSocket.asyncListen({
-          onSocketAccepted: (socket: any, transport: any) =>
-            this.listener.onSocketAccepted(socket, transport, true),
-          onStopListening: (_socket: any, status: any) => {
-            ztoolkit.log(`[HttpServer] OAuth listener stopped (status: ${status})`);
-          },
-        });
-        ztoolkit.log(`[HttpServer] OAuth-only endpoint: 127.0.0.1:${port + 1}/mcp`);
+      // Its security is determined by the socket that accepted the request.
+      if (oauthListenerEnabled) {
+        try {
+          const oauthSocket = Cc[
+            "@mozilla.org/network/server-socket;1"
+          ].createInstance(Ci.nsIServerSocket);
+          oauthSocket.init(port + 1, true, -1);
+          oauthSocket.asyncListen({
+            onSocketAccepted: (socket: any, transport: any) =>
+              this.listener.onSocketAccepted(socket, transport, true),
+            onStopListening: (_socket: any, status: any) => {
+              ztoolkit.log(`[HttpServer] OAuth listener stopped (status: ${status})`);
+            },
+          });
+          this.oauthSocket = oauthSocket;
+          ztoolkit.log(`[HttpServer] OAuth-only endpoint: 127.0.0.1:${port + 1}/mcp`);
+        } catch (error) {
+          // A conflicting port + 1 must not take the local listener down with it.
+          this.oauthSocket = null;
+          ztoolkit.log(
+            `[HttpServer] OAuth listener unavailable on 127.0.0.1:${port + 1}: ${error}`,
+            "error",
+          );
+          Zotero.debug(`[HttpServer] Failed to bind the OAuth listener on port ${port + 1}: ${error}`);
+        }
       }
 
       Zotero.debug(
@@ -129,12 +151,8 @@ export class HttpServer {
   public stop() {
     ztoolkit.log(`[HttpServer] stop() called - isRunning: ${this.isRunning}, hasSocket: ${!!this.serverSocket}`);
 
-    if (!this.isRunning || !this.serverSocket) {
-      ztoolkit.log("[HttpServer] Server is not running, nothing to stop");
-      return;
-    }
-
-    // Close the Cloudflare/OAuth socket independently of the local socket.
+    // Close the Cloudflare/OAuth socket first: if the main socket already died
+    // on its own, this early return must not leave port + 1 listening.
     if (this.oauthSocket) {
       try {
         this.oauthSocket.close();
@@ -143,6 +161,11 @@ export class HttpServer {
       } finally {
         this.oauthSocket = null;
       }
+    }
+
+    if (!this.isRunning || !this.serverSocket) {
+      ztoolkit.log("[HttpServer] Server is not running, nothing to stop");
+      return;
     }
 
     // Stop session cleanup timer FIRST to prevent new cleanup cycles
@@ -261,7 +284,7 @@ export class HttpServer {
     
     let headers = baseHeaders;
     // The OAuth redirects/challenge need these real HTTP headers.
-    for (const name of ["Location", "WWW-Authenticate", "Cache-Control", "Allow"]) {
+    for (const name of ["Location", "WWW-Authenticate", "Cache-Control", "Allow", "X-Frame-Options"]) {
       const value = result.headers?.[name];
       if (typeof value === "string" && !/[\r\n]/.test(value)) {
         headers += `${name}: ${value}\r\n`;
@@ -432,9 +455,9 @@ export class HttpServer {
           // Authenticate before allocating MCP sessions or dispatching tools.
           // Only the OAuth discovery, registration, login, and token endpoints
           // bypass Bearer validation. /ping remains a public health check.
-          // Authentication boundary: local MCP (port) is unauthenticated;
-          // the dedicated OAuth socket (port + 1) enforces OAuth. The second
-          // socket is opened only while OAuth is enabled. No IP/Host bypass.
+          // Authentication follows the accepting socket, so both entry points
+          // keep working side by side: the MCP port (port) is unauthenticated,
+          // the OAuth socket (port + 1) enforces a Bearer token. No IP/Host bypass.
           const oauthResult = requiresOAuth
             ? await oauthServer.handleRequest(method, path, query, requestBody, headerText)
             : null;

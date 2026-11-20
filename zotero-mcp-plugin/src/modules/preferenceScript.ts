@@ -80,6 +80,28 @@ function bindHtmlSelect(doc: Document, selector: string, prefKey: string) {
   });
 }
 
+/** Listener layout depends on both "Allow remote access" and OAuth: apply it now. */
+function restartListeners(): void {
+  const server = addon.data.httpServer;
+  if (!server?.isServerRunning()) return;
+  try {
+    const configured = Number(Zotero.Prefs.get(
+      "extensions.zotero.zotero-mcp-plugin.mcp.server.port", true,
+    ));
+    const port = Number.isFinite(configured) && configured > 0 ? configured : 23120;
+    server.stop();
+    server.start(port);
+    // A busy port + 1 no longer stops the local listener, so report it here.
+    if (oauthServer.isEnabled() && !server.isOAuthListenerRunning()) {
+      addon.data.prefs!.window.alert(
+        `The OAuth listener could not start on port ${port + 1}. Choose another MCP port or free that port.`,
+      );
+    }
+  } catch (error) {
+    addon.data.prefs!.window.alert(`Failed to restart MCP listener ports: ${error}`);
+  }
+}
+
 /** OAuth is opt-in; the password can be viewed/copied from local credential storage. */
 function bindOAuthPreferences(doc: Document) {
   const prefix = "extensions.zotero.zotero-mcp-plugin.oauth";
@@ -180,18 +202,7 @@ function bindOAuthPreferences(doc: Document) {
     }
     Zotero.Prefs.set(`${prefix}.enabled`, enabled.checked, true);
     // Listener layout changed: restart both sockets without changing OAuth flows.
-    const server = addon.data.httpServer;
-    if (server?.isServerRunning()) {
-      try {
-        const port = Number(Zotero.Prefs.get(
-          "extensions.zotero.zotero-mcp-plugin.mcp.server.port", true,
-        )) || 23120;
-        server.stop();
-        server.start(port);
-      } catch (error) {
-        addon.data.prefs!.window.alert(`Failed to restart MCP listener ports: ${error}`);
-      }
-    }
+    restartListeners();
   });
 }
 
@@ -261,7 +272,9 @@ function bindPrefEvents() {
   portInput?.addEventListener("change", () => {
     if (portInput) {
       const port = parseInt(portInput.value, 10);
-      if (isNaN(port) || port < 1024 || port > 65535) {
+      // With OAuth on, port + 1 is the authenticated listener and must stay valid.
+      if (isNaN(port) || port < 1024 || port > 65535 ||
+          (oauthServer.isEnabled() && port >= 65535)) {
         addon.data.prefs!.window.alert(
           getString("pref-server-port-invalid" as any),
         );
@@ -275,6 +288,10 @@ function bindPrefEvents() {
 
   // Bind HTML toggle switches (these need manual pref sync since they're not XUL checkboxes)
   bindHtmlCheckbox(doc, `#zotero-prefpane-${config.addonRef}-mcp-server-allow-remote`, "extensions.zotero.zotero-mcp-plugin.mcp.server.allowRemote");
+  // Rebinding the listener is what makes "Allow remote access" take effect,
+  // including the OAuth listener on port + 1.
+  (doc?.querySelector(`#zotero-prefpane-${config.addonRef}-mcp-server-allow-remote`) as HTMLInputElement | null)
+    ?.addEventListener("change", () => restartListeners());
   bindOAuthPreferences(doc);
   bindHtmlCheckbox(doc, `#zotero-prefpane-${config.addonRef}-include-metadata`, "extensions.zotero.zotero-mcp-plugin.ui.includeMetadata");
   bindHtmlCheckbox(doc, `#zotero-prefpane-${config.addonRef}-semantic-auto-update`, "extensions.zotero.zotero-mcp-plugin.semantic.autoUpdate");
