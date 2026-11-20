@@ -7,6 +7,13 @@ import { createZToolkit } from "./utils/ztoolkit";
 import { MCPSettingsService } from "./modules/mcpSettingsService";
 import { registerSemanticIndexColumn, unregisterSemanticIndexColumn, refreshSemanticColumn } from "./modules/semanticIndexColumn";
 import {
+  registerSemanticSearchPrefObserver,
+  registerSemanticSearchToolbar,
+  registerFindSimilarMenu,
+  unregisterSemanticSearchUI,
+  unregisterSemanticSearchPrefObserver,
+} from "./modules/semanticSearchDialog";
+import {
   flushNotifierCommits,
   flushWriteOperations,
 } from "./modules/deferredNotifierCommitter";
@@ -492,6 +499,16 @@ async function onStartup() {
   registerItemNotifier();
   ztoolkit.log("[MCP Plugin] [STARTUP] Item notifier registered");
 
+  // Register semantic-search preference observer so toggling the pref at
+  // runtime adds or removes the toolbar button, the context menu and the
+  // open dialog (the MCP tools check the pref on every call).
+  try {
+    registerSemanticSearchPrefObserver();
+  } catch (error) {
+    const err = error instanceof Error ? error : new Error(String(error));
+    ztoolkit.log(`[MCP Plugin] [STARTUP] Error registering semantic-search preference observer: ${err.message}`, "error");
+  }
+
   addon.data.initialized = true;
   ztoolkit.log("[MCP Plugin] ======== STARTUP COMPLETE ========");
 }
@@ -517,10 +534,15 @@ async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
 
   // Register semantic index status column
   registerSemanticIndexColumn();
+
+  // Semantic-search UI is registered only when semantic search is enabled.
+  registerSemanticSearchToolbar(win);
+  registerFindSimilarMenu(win);
 }
 
 async function onMainWindowUnload(win: Window): Promise<void> {
   unregisterSemanticIndexMenus(win);
+  unregisterSemanticSearchUI(win);
   ztoolkit.unregisterAll();
 }
 
@@ -634,6 +656,7 @@ async function onShutdown(): Promise<void> {
     ztoolkit.log("[MCP Plugin] [SHUTDOWN] Removing context menu elements...");
     for (const win of Zotero.getMainWindows()) {
       unregisterSemanticIndexMenus(win as unknown as Window);
+      unregisterSemanticSearchUI(win as unknown as Window);
     }
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));
@@ -642,6 +665,15 @@ async function onShutdown(): Promise<void> {
 
   ztoolkit.log("[MCP Plugin] [SHUTDOWN] Unregistering server preferences...");
   serverPreferences.unregister();
+
+  // Unregister the semantic-search preference observer so it cannot fire
+  // during teardown.
+  try {
+    unregisterSemanticSearchPrefObserver();
+  } catch (error) {
+    const err = error instanceof Error ? error : new Error(String(error));
+    ztoolkit.log(`[MCP Plugin] [SHUTDOWN] Error unregistering semantic-search preference observer: ${err.message}`, "error");
+  }
 
   ztoolkit.unregisterAll();
   addon.data.alive = false;
