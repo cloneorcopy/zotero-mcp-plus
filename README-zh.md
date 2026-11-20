@@ -118,6 +118,14 @@ AI 客户端 ↔ Streamable HTTP ↔ Zotero 插件（集成 MCP 服务器）
 - **Cursor IDE**: Streamable HTTP MCP 支持
 - **自定义实现**: Streamable HTTP 协议
 
+#### 可选：通过 OAuth 让远程客户端（ChatGPT 网页版）接入
+
+插件可以为 HTTPS 隧道（例如 ChatGPT 的自定义远程 MCP 连接器）提供可选的、自托管的 OAuth 2.0 授权码 + PKCE 流程，默认关闭。
+
+鉴权按入口区分：MCP 端口（默认 `23120`）保持免鉴权，仅受「允许远程访问」控制；需要令牌的监听器运行在「MCP 端口 + 1」（默认 `23121`，仅回环地址），请求必须携带 Bearer 令牌。隧道请指向「MCP 端口 + 1」，不要指向免鉴权的 MCP 端口。
+
+配置步骤、监听器组合矩阵、接口清单、状态上限与冒烟测试见 [zotero-mcp-plugin/OAUTH.md](./zotero-mcp-plugin/OAUTH.md)。
+
 ### 验证与故障排查
 
 配置完成后，如何确认一切正常工作？
